@@ -86,10 +86,6 @@ export function hasCvCredentials() {
     if (typeof get !== 'function') return false;
     return !!(get('gatewayKey') || (get('email') && get('appPassword')));
 }
-/** The saved login's state: { configured, loggedIn, name, nsfwVerified, gateway, error }. */
-export async function fetchCvAuthStatus({ signal = null } = {}) {
-    return requestJson('/auth/status', signal);
-}
 /** The account's favorites: { total, cards: [card rows like search results] }. */
 export async function fetchCvFavorites({ limit = 48, offset = 0, signal = null } = {}) {
     return requestJson('/favorites?' + paramsQuery({ limit, offset }), signal);

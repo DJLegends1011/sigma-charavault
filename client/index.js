@@ -5,7 +5,6 @@
 import { initCvApi, cvMetadataCache, checkCvLogin } from './charavault-api.js';
 import charavaultProvider from './charavault-provider.js';
 import charavaultBrowseView, {
-    refreshCvAccount,
     setCvSettings,
     closeCvPreviewModal,
     isCvPreviewOpen,
@@ -143,8 +142,6 @@ function wireLoginCheck(ctx, findEl) {
                 toast(`Logged in to CharaVault as ${result.name}`, 'success');
                 // the session changes what every cached answer and thumbnail shows
                 cvMetadataCache.clear();
-                // the browse view's account bar (if it is built) shows the new login
-                if (document.getElementById('cvAccountBar')) void refreshCvAccount();
             } else {
                 btn.classList.add('error');
                 btn.innerHTML = icon('times');
@@ -223,7 +220,6 @@ export default {
             provider: charavaultProvider,
             browseView: charavaultBrowseView,
             renderSettings: (el) => buildCvSettingsSection(ctx, el),
-            refreshAccount: () => refreshCvAccount(),
         };
     },
 

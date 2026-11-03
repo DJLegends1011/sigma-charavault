@@ -548,26 +548,6 @@ export function register(router, ctx) {
         await relayJson(res, await upstream(req, '/lorebooks/' + encodeURIComponent(id)));
     });
 
-    // who the saved login is, for the browse view's account bar (the session is cached, so this is cheap)
-    route('/auth/status', async (req, res) => {
-        setSafeHeaders(res);
-        res.set('Cache-Control', 'no-store');
-        const { email, appPassword, gatewayKey } = readCredentials(req, ctx);
-        // a gateway logs in by itself: there is no session here to report on
-        if (gatewayKey) return res.json({ configured: true, loggedIn: true, gateway: true, name: null, nsfwVerified: null });
-        if (!email || !appPassword) return res.json({ configured: false, loggedIn: false });
-        const token = await sessionFor(req);
-        const cur = sessions.get(sessionKey(req));
-        const user = cur?.user || {};
-        res.json({
-            configured: true,
-            loggedIn: !!token,
-            name: token ? String(user.display_name || user.username || email) : null,
-            nsfwVerified: token ? !!user.nsfw_verified : null,
-            error: token ? null : (cur?.error || 'Login failed'),
-        });
-    });
-
     // favorites: the account's list, one card's state, and adding (POST) / removing (DELETE) a card
     route('/favorites', async (req, res) => {
         const qs = queryString(req.query, ['limit', 'offset']);

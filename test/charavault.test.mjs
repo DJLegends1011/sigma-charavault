@@ -643,21 +643,11 @@ test('app password login: email + cv_ token log in once, the session rides as Be
     assert.notEqual(upstreamRequests.at(-1).headers.authorization, 'Bearer sess_1');
 });
 
-test('account status and favorites: the status names the login, favorites need it, and add/remove round-trip', async () => {
+test('favorites routes: they need the login, and add/remove round-trip through the account', async () => {
     favoritePaths.clear();
-    // no login saved
-    let status = await cvExt('/auth/status');
-    assert.equal(status.status, 200);
-    assert.deepEqual(status.body, { configured: false, loggedIn: false });
     assert.equal((await cvExt('/favorites')).status, 401, 'favorites without a login answer CharaVault\'s 401');
 
-    // a working login
     await me.api('/settings', 'PATCH', { 'ext:charavault:email': 'me@example.com', 'ext:charavault:appPassword': 'cv_good_app_pw' });
-    status = await cvExt('/auth/status');
-    assert.equal(status.body.loggedIn, true);
-    assert.equal(status.body.name, 'Tester');
-    assert.equal(status.body.nsfwVerified, true);
-
     const adley = encodeURIComponent('cards/Adley_5412114.png');
     assert.equal((await cvExt('/favorites/check?path=' + adley)).body.is_favorite, false);
     const added = await cvExt('/favorites?path=' + adley, 'POST');
@@ -673,14 +663,6 @@ test('account status and favorites: the status names the login, favorites need i
     assert.equal(removed.body.favorited, false);
     assert.equal(upstreamRequests.at(-1).method, 'DELETE');
     assert.equal((await cvExt('/favorites?path=' + encodeURIComponent('../auth/me'), 'POST')).status, 400, 'a traversal path never reaches CharaVault');
-
-    // a wrong app password: configured, not logged in, and why
-    forgetCvSessions();
-    await me.api('/settings', 'PATCH', { 'ext:charavault:appPassword': 'cv_wrong' });
-    status = await cvExt('/auth/status');
-    assert.equal(status.body.configured, true);
-    assert.equal(status.body.loggedIn, false);
-    assert.equal(status.body.error, 'Invalid email or password');
 });
 
 test('server proxy routes forward queries, attach User-Agent & auth headers, strip CORP, and set sandbox CSP', async () => {
@@ -994,18 +976,22 @@ test('client extension boots, renders settings & preview modal (with failed rati
     assert.equal(await provider.fetchVersionData({ fullPath: 'cards/Adley_5412114.png' }, 'r9-99'), null, 'a refused revision answers null');
     assert.equal(await provider.fetchVersionData({ fullPath: 'cards/Adley_5412114.png' }, '../x'), null);
 
-    // 11. Account bar + favorites, through the real browse DOM
+    // 11. Favorites through the real browse DOM: Features > Personal > My Favorites, and the preview's heart
     const waitFor = async (check, what) => {
         for (let i = 0; i < 100; i++) { if (check()) return; await new Promise(r => setTimeout(r, 10)); }
-        assert.fail(`timed out waiting for ${what} (last toasts: ${JSON.stringify(page.log.toasts.slice(-2))})`);
+        assert.fail(`timed out waiting for ${what}`);
     };
     const $ = (id) => page.document.getElementById(id);
+    const setBox = (id, checked) => { $(id).checked = checked; $(id).dispatchEvent(new Event('change')); };
+    const gridPaths = () => [...$('cvGrid').querySelectorAll('.browse-card')].map(c => c.dataset.fullPath);
     favoritePaths.clear();
-    // logged out: the bar offers the login, Favorites stays hidden
-    await handle.refreshAccount();
-    assert.equal($('cvAccountLabel').textContent, 'Log in for 18+ cards & favorites');
-    assert.equal($('cvFavoritesBtn').hidden, true);
+
+    // logged out: My Favorites is in the Features dropdown, and checking it asks for the login instead
+    assert.ok($('cvFiltersDropdown').querySelector('#cvFilterFavorites'), 'My Favorites sits in Features');
     assert.equal(provider.isAuthenticated, false);
+    setBox('cvFilterFavorites', true);
+    assert.equal($('cvFilterFavorites').checked, false, 'without a login the box stays off');
+
     // log in: the server reads its settings, the page its own (typed into Settings like a user would)
     await me.api('/settings', 'PATCH', { 'ext:charavault:email': 'me@example.com', 'ext:charavault:appPassword': 'cv_good_app_pw' });
     for (const [id, value] of [['settingsCharavaultEmail', 'me@example.com'], ['settingsCharavaultAppPassword', 'cv_good_app_pw']]) {
@@ -1013,39 +999,31 @@ test('client extension boots, renders settings & preview modal (with failed rati
         $(id).dispatchEvent(new Event('change'));
     }
     assert.equal(provider.isAuthenticated, true);
-    await handle.refreshAccount();
-    assert.equal($('cvAccountLabel').textContent, 'Logged in as Tester');
-    assert.equal($('cvAccountBtn').dataset.state, 'in');
-    assert.equal($('cvFavoritesBtn').hidden, false);
 
-    // the preview's heart: shown, reads CharaVault's state, and toggles it
+    // the preview's heart (inline, beside the creator) reads CharaVault's state and toggles it
     await provider.openPreview({ ...MOCK_CARDS[0], fullPath: 'cards/Adley_5412114.png' });
-    assert.equal($('cvFavBtn').hidden, false);
-    await waitFor(() => $('cvFavBtn').dataset.fav === 'false', 'the favorite check');
-    $('cvFavBtn').click();
-    await waitFor(() => $('cvFavBtn').dataset.fav === 'true', 'the favorite to be added');
+    const heart = $('cvCharFavoriteBtn');
+    assert.equal(heart.classList.contains('favorited'), false);
+    heart.click();
+    await waitFor(() => heart.classList.contains('favorited'), 'the favorite to be added');
     assert.ok(favoritePaths.has('cards/Adley_5412114.png'));
     handle.browseView.closePreview();
 
-    // Favorites mode: the grid is the account's list
-    $('cvFavoritesBtn').click();
-    assert.equal($('cvFavoritesBtn').getAttribute('aria-pressed'), 'true');
-    await waitFor(() => $('cvGrid').querySelectorAll('.browse-card').length === 1, 'the favorites grid');
-    assert.equal($('cvGrid').querySelector('.browse-card').dataset.fullPath, 'cards/Adley_5412114.png');
-    // un-favoriting from the preview takes the card out of the favorites grid
+    // My Favorites: the grid is the account's list
+    setBox('cvFilterFavorites', true);
+    assert.equal($('cvFilterFavorites').checked, true);
+    await waitFor(() => gridPaths().length === 1 && gridPaths()[0] === 'cards/Adley_5412114.png', 'the favorites grid');
+    // un-favoriting from the preview takes the card out of that list
     await provider.openPreview({ ...MOCK_CARDS[0], fullPath: 'cards/Adley_5412114.png' });
-    await waitFor(() => $('cvFavBtn').dataset.fav === 'true', 'the favorite check');
-    $('cvFavBtn').click();
-    await waitFor(() => $('cvFavBtn').dataset.fav === 'false', 'the favorite to be removed');
-    assert.equal($('cvGrid').querySelectorAll('.browse-card').length, 0);
+    await waitFor(() => heart.classList.contains('favorited'), 'the favorite check');
+    heart.click();
+    await waitFor(() => !heart.classList.contains('favorited') && !heart.classList.contains('loading'), 'the favorite to be removed');
+    assert.deepEqual(gridPaths(), []);
     handle.browseView.closePreview();
 
-    // logging out leaves Favorites
-    await me.api('/settings', 'PATCH', { 'ext:charavault:email': '', 'ext:charavault:appPassword': '' });
-    $('settingsCharavaultAppPassword').value = '';
-    $('settingsCharavaultAppPassword').dispatchEvent(new Event('change'));
-    await handle.refreshAccount();
-    assert.equal($('cvFavoritesBtn').hidden, true);
-    assert.equal($('cvFavoritesBtn').getAttribute('aria-pressed'), 'false', 'a lost login switches Favorites off');
-    await waitFor(() => $('cvGrid').querySelectorAll('.browse-card').length > 0, 'the catalog grid to come back');
+    // a typed search is a catalog search: My Favorites steps aside
+    $('cvSearchInput').value = 'Adley';
+    $('cvSearchBtn').click();
+    assert.equal($('cvFilterFavorites').checked, false);
+    await waitFor(() => gridPaths().includes('cards/Adley_5412114.png'), 'the search results');
 });

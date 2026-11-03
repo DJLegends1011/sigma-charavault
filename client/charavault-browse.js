@@ -16,7 +16,6 @@ import {
 import {
     CV_SORTS,
     hasCvCredentials,
-    fetchCvAuthStatus,
     fetchCvFavorites,
     checkCvFavorite,
     setCvFavorite,
@@ -65,9 +64,6 @@ let cvSelectedChar = null;
 let cvTagFilters = new Set(); // tag names to include
 let cvGridRenderedCount = 0;
 let cvDetailToken = 0;        // generation counter for the preview's async fills
-let cvFavoritesMode = false;  // the grid shows the account's favorites instead of a search
-let cvAccount = null;         // the last /auth/status answer; null while checking
-let cvAccountToken = 0;
 
 const PAGE_SIZE = 48;
 // a page the client filters thinned is topped up from the next ones until it reaches this
@@ -83,11 +79,16 @@ let cvSettings = null;
 let view; // module-scoped BrowseView instance reference (set once in the constructor)
 
 // The Library rows of the Features dropdown; the lorebook tri-state rides beside them as radios
+// favorites is a data-source switch (the account's list), not a client predicate
 const CV_FEATURE_FILTERS = [
+    { key: 'favorites', id: 'cvFilterFavorites', section: 'personal', icon: 'fa-heart', iconStyle: 'color: #e74c3c;', label: 'My Favorites' },
     ...libraryFeatureRows('cv', () => view, isCharPossibleMatchObj),
 ];
 const cvFeatureState = featureFilterState(CV_FEATURE_FILTERS);
-const CV_FILTER_SECTIONS = [{ key: 'library', title: 'Library:' }];
+const CV_FILTER_SECTIONS = [
+    { key: 'personal', title: 'Personal <span class="browse-hint-sub">(requires login)</span>:' },
+    { key: 'library', title: 'Library:' },
+];
 
 /** The extension's settings facade (ctx.settings), read for the NSFW choice. */
 export function setCvSettings(settings) {
@@ -233,7 +234,7 @@ function cvFetchOpts(pageIndex = cvCurrentPage) {
 }
 
 async function fetchOneCvPage(pageIndex = cvCurrentPage) {
-    if (cvFavoritesMode) {
+    if (cvFeatureState.favorites) {
         const fav = await fetchCvFavorites({ limit: PAGE_SIZE, offset: pageIndex * PAGE_SIZE });
         const raw = (fav?.cards || [])
             .filter(r => r?.folder && r?.file)
@@ -313,8 +314,8 @@ async function loadCvCharacters(append = false) {
         if (!append && cvCharacters.length === 0 && grid) {
             grid.innerHTML = `
                 <div class="browse-empty-state">
-                    <i class="fa-solid ${cvFavoritesMode ? 'fa-heart' : 'fa-vault'} browse-empty-icon"></i>
-                    <p class="u-mt-md">${cvFavoritesMode ? 'No favorites yet: tap the heart on a card to add one' : 'No characters found'}</p>
+                    <i class="fa-solid ${cvFeatureState.favorites ? 'fa-heart' : 'fa-vault'} browse-empty-icon"></i>
+                    <p class="u-mt-md">${cvFeatureState.favorites ? 'No favorites yet: tap the heart on a card to add one' : 'No characters found'}</p>
                 </div>
             `;
         }
@@ -353,8 +354,8 @@ function filterByCreator(creator) {
     if (!creator) return;
     cvCurrentCreator = creator;
     cvCurrentSearch = '';
-    cvFavoritesMode = false;
-    syncCvFavoritesToggle();
+    // the favorites list never reads the creator
+    clearCvFavoritesFilter();
 
     const searchInput = document.getElementById('cvSearchInput');
     if (searchInput) searchInput.value = '';
@@ -376,125 +377,58 @@ function clearCreatorFilter() {
 }
 
 // ========================================
-// ACCOUNT BAR (login state + Favorites)
+// FAVORITES (Features > Personal, and the preview's heart)
 // ========================================
 
-function renderCvAccountBar() {
-    const btn = document.getElementById('cvAccountBtn');
-    const label = document.getElementById('cvAccountLabel');
-    if (!btn || !label) return;
-    const a = cvAccount;
-    let text = 'Checking login...';
-    let title = '';
-    let state = 'checking';
-    if (a && !a.configured) {
-        text = 'Log in for 18+ cards & favorites';
-        title = 'Add your CharaVault email and an App Password in Settings > Online > CharaVault';
-        state = 'out';
-    } else if (a?.loggedIn && a.gateway) {
-        text = 'Logged in through your gateway';
-        title = 'Your gateway logs in to CharaVault for you';
-        state = 'in';
-    } else if (a?.loggedIn) {
-        const ageOff = a.nsfwVerified === false;
-        text = `Logged in as ${a.name || 'you'}${ageOff ? ' (18+ off)' : ''}`;
-        title = ageOff ? 'This account is not age-verified on CharaVault, so 18+ cards stay hidden' : 'Your CharaVault account: open its settings';
-        state = ageOff ? 'warn' : 'in';
-    } else if (a) {
-        text = 'CharaVault login failed';
-        title = a.error ? `${a.error}: open settings to fix it` : 'Open settings to fix it';
-        state = 'error';
-    }
-    label.textContent = text;
-    btn.title = title;
-    btn.dataset.state = state;
-
-    const loggedIn = !!a?.loggedIn;
-    const favToggle = document.getElementById('cvFavoritesBtn');
-    if (favToggle) favToggle.hidden = !loggedIn;
-    const heart = document.getElementById('cvFavBtn');
-    if (heart) heart.hidden = !loggedIn;
-    // a login that went away takes Favorites with it (never while still checking)
-    if (a && !loggedIn && cvFavoritesMode) setCvFavoritesMode(false);
+/** Switch My Favorites off (its box and the Features badge); answers whether it was on. */
+function clearCvFavoritesFilter() {
+    if (!cvFeatureState.favorites) return false;
+    cvFeatureState.favorites = false;
+    const box = document.getElementById('cvFilterFavorites');
+    if (box) box.checked = false;
+    updateCvFiltersBtn();
+    return true;
 }
 
-/** Ask the server who the saved login is and redraw the account bar. */
-export async function refreshCvAccount() {
-    const token = ++cvAccountToken;
-    if (!hasCvCredentials()) {
-        cvAccount = { configured: false, loggedIn: false };
-        renderCvAccountBar();
-        return cvAccount;
-    }
-    cvAccount = null;
-    renderCvAccountBar();
-    let status;
-    try {
-        status = await fetchCvAuthStatus();
-    } catch (e) {
-        status = { configured: true, loggedIn: false, error: e?.message || String(e) };
-    }
-    if (token !== cvAccountToken) return cvAccount;
-    cvAccount = status;
-    renderCvAccountBar();
-    return status;
-}
-
-function syncCvFavoritesToggle() {
-    const btn = document.getElementById('cvFavoritesBtn');
+/** The preview's heart: favorited or not, and whether a request is in flight. */
+function syncCvFavButton(favorited, loading = false) {
+    const btn = document.getElementById('cvCharFavoriteBtn');
     if (!btn) return;
-    btn.classList.toggle('active', cvFavoritesMode);
-    btn.setAttribute('aria-pressed', String(cvFavoritesMode));
-    btn.title = cvFavoritesMode ? 'Showing your favorites: click to browse everything' : 'Show your CharaVault favorites';
-}
-
-function setCvFavoritesMode(on) {
-    cvFavoritesMode = !!on;
-    if (cvFavoritesMode) {
-        // favorites are a list of their own: a search or creator scope does not apply to it
-        cvCurrentSearch = '';
-        cvCurrentCreator = '';
-        const searchInput = document.getElementById('cvSearchInput');
-        if (searchInput) searchInput.value = '';
-        document.getElementById('cvClearSearchBtn')?.classList.add('hidden');
-        document.getElementById('cvCreatorBanner')?.classList.add('hidden');
-    }
-    syncCvFavoritesToggle();
-    charavaultBrowseView.reload();
-}
-
-/** The preview's heart: true / false, or null while unknown. */
-function syncCvFavButton(favorited) {
-    const btn = document.getElementById('cvFavBtn');
-    if (!btn) return;
-    btn.dataset.fav = favorited === null ? '' : String(!!favorited);
-    btn.setAttribute('aria-pressed', String(!!favorited));
-    btn.title = favorited ? 'In your CharaVault favorites: click to remove' : 'Add to your CharaVault favorites';
+    btn.classList.toggle('favorited', !!favorited);
+    btn.classList.toggle('loading', !!loading);
     const icon = btn.querySelector('i');
     if (icon) icon.className = favorited ? 'fa-solid fa-heart' : 'fa-regular fa-heart';
-    btn.classList.toggle('active', !!favorited);
+    btn.title = favorited ? 'Remove from favorites on CharaVault' : 'Add to favorites on CharaVault';
 }
 
-async function toggleCvFavorite() {
-    const btn = document.getElementById('cvFavBtn');
-    const fullPath = btn?.dataset.path;
-    if (!btn || !fullPath || btn.disabled) return;
-    const want = btn.dataset.fav !== 'true';
-    btn.disabled = true;
+async function toggleCvCharFavorite() {
+    const char = cvSelectedChar;
+    if (!char) return;
+    if (!hasCvCredentials()) {
+        showToast('Login to CharaVault to add favorites', 'info');
+        charavaultBrowseView.provider?.openAuthUI();
+        return;
+    }
+    const btn = document.getElementById('cvCharFavoriteBtn');
+    if (!btn || btn.classList.contains('loading')) return;
+    const fullPath = char.fullPath || cvFullPath(char.folder, char.file);
+    const want = !btn.classList.contains('favorited');
+    syncCvFavButton(!want, true);
     try {
         const now = await setCvFavorite(fullPath, want);
-        if (btn.dataset.path === fullPath) syncCvFavButton(now);
-        showToast(now ? 'Added to your CharaVault favorites' : 'Removed from your CharaVault favorites', 'success');
-        if (cvFavoritesMode && !now) {
+        if (cvSelectedChar !== char) return;
+        syncCvFavButton(now);
+        // un-favorited while My Favorites is on: it leaves that list
+        if (cvFeatureState.favorites && !now) {
             cvCharacters = cvCharacters.filter(c => c.fullPath !== fullPath);
             const grid = document.getElementById('cvGrid');
             [...(grid?.querySelectorAll('.browse-card') || [])].find(c => c.dataset.fullPath === fullPath)?.remove();
             cvGridRenderedCount = cvCharacters.length;
         }
     } catch (e) {
-        showToast(`CharaVault favorite failed: ${e?.message || e}`, 'error');
-    } finally {
-        btn.disabled = false;
+        if (cvSelectedChar === char) syncCvFavButton(!want);
+        showToast('Failed to update favorite', 'error');
+        debugLog('[CVBrowse] favorite:', e?.message || e);
     }
 }
 
@@ -505,9 +439,8 @@ async function toggleCvFavorite() {
 function performCvSearch() {
     const input = document.getElementById('cvSearchInput');
     cvCurrentSearch = (input?.value || '').trim();
-    // a typed search leaves Favorites for the whole catalog
-    cvFavoritesMode = false;
-    syncCvFavoritesToggle();
+    // a typed search is a catalog search: My Favorites steps aside
+    clearCvFavoritesFilter();
     // a typed search replaces the creator scope, so the banner leaves with it
     cvCurrentCreator = '';
     document.getElementById('cvCreatorBanner')?.classList.add('hidden');
@@ -650,18 +583,12 @@ async function openCvPreview(char) {
     if (openBtn) openBtn.href = cardUrl;
     const copyBtn = document.getElementById('cvCopyLinkBtn');
     if (copyBtn) copyBtn.dataset.url = cardUrl;
-    // the heart: unknown until CharaVault says, and only for a working login
-    const favPath = cvFullPath(folder, file);
-    const favBtn = document.getElementById('cvFavBtn');
-    if (favBtn) {
-        favBtn.dataset.path = favPath;
-        favBtn.hidden = !cvAccount?.loggedIn;
-        syncCvFavButton(null);
-        if (cvAccount?.loggedIn) {
-            checkCvFavorite(favPath)
-                .then(f => { if (previewToken === cvDetailToken) syncCvFavButton(f); })
-                .catch(e => debugLog('[CVBrowse] favorite check:', e?.message || e));
-        }
+    // the heart: empty until CharaVault says otherwise (it can only say so for a saved login)
+    syncCvFavButton(false);
+    if (hasCvCredentials()) {
+        checkCvFavorite(cvFullPath(folder, file))
+            .then(f => { if (previewToken === cvDetailToken) syncCvFavButton(f); })
+            .catch(e => debugLog('[CVBrowse] favorite check:', e?.message || e));
     }
 
     // Stats row: list-row values first; the parallel fetch refreshes them
@@ -1118,12 +1045,6 @@ function initCvView() {
     // Load more
     on('cvLoadMoreBtn', 'click', () => charavaultBrowseView.reload({ append: true }));
 
-    // Account bar: the login opens its settings; Favorites swaps the grid's source
-    on('cvAccountBtn', 'click', () => charavaultBrowseView.provider?.openAuthUI());
-    on('cvFavoritesBtn', 'click', () => setCvFavoritesMode(!cvFavoritesMode));
-    syncCvFavoritesToggle();
-    void refreshCvAccount();
-
     // NSFW 3-state toggle
     on('cvNsfwToggle', 'click', () => {
         cycleCvNsfwMode();
@@ -1191,9 +1112,28 @@ function initCvView() {
         });
     });
 
-    charavaultBrowseView.wireFeatureFilters(CV_FEATURE_FILTERS, cvFeatureState, () => {
+    charavaultBrowseView.wireFeatureFilters(CV_FEATURE_FILTERS, cvFeatureState, (f, e) => {
+        // My Favorites is the account's list: a search or creator scope does not apply to it
+        if (f?.key === 'favorites' && e?.target?.checked) {
+            cvCurrentSearch = '';
+            cvCurrentCreator = '';
+            const searchInput = document.getElementById('cvSearchInput');
+            if (searchInput) searchInput.value = '';
+            document.getElementById('cvClearSearchBtn')?.classList.add('hidden');
+            document.getElementById('cvCreatorBanner')?.classList.add('hidden');
+        }
         charavaultBrowseView.reload();
-    }, { badge: updateCvFiltersBtn });
+    }, {
+        badge: updateCvFiltersBtn,
+        beforeChange(f, e) {
+            if (f.key === 'favorites' && e.target.checked && !hasCvCredentials()) {
+                e.target.checked = false;
+                showToast('Login required to view your CharaVault favorites', 'warning');
+                charavaultBrowseView.provider?.openAuthUI();
+                return false;
+            }
+        },
+    });
 
     // Dropdown dismiss (document-level, released on deactivate)
     charavaultBrowseView._registerDropdownDismiss([
@@ -1211,7 +1151,7 @@ function initCvView() {
         }
 
         on('cvCharClose', 'click', () => closeCvPreviewModal());
-        on('cvFavBtn', 'click', () => toggleCvFavorite());
+        on('cvCharFavoriteBtn', 'click', () => toggleCvCharFavorite());
         on('cvCopyLinkBtn', 'click', async () => {
             const url = document.getElementById('cvCopyLinkBtn')?.dataset?.url;
             if (!url) return;
@@ -1475,16 +1415,6 @@ class CharaVaultBrowseView extends BrowseView {
                     </div>
                 </div>
 
-                <!-- Account bar: who is logged in (or how to), and the Favorites list once logged in -->
-                <div id="cvAccountBar" class="cv-account-bar">
-                    <button id="cvAccountBtn" type="button" class="glass-btn cv-account-btn" data-state="checking">
-                        <i class="fa-solid fa-user-shield"></i> <span id="cvAccountLabel">Checking login...</span>
-                    </button>
-                    <button id="cvFavoritesBtn" type="button" class="glass-btn cv-favorites-toggle" aria-pressed="false" title="Show your CharaVault favorites" hidden>
-                        <i class="fa-solid fa-heart"></i> <span>Favorites</span>
-                    </button>
-                </div>
-
                 <!-- Creator banner (shown when filtering by creator) -->
                 <div id="cvCreatorBanner" class="cv-creator-banner hidden">
                     <div class="cv-creator-banner-content">
@@ -1524,6 +1454,7 @@ class CharaVaultBrowseView extends BrowseView {
                         <h2 id="cvCharName">Character Name</h2>
                         <p class="browse-char-meta">
                             by <a id="cvCharCreator" href="#" class="browse-meta-identity" title="Show all by this creator">Creator</a>
+                            • <span id="cvCharFavoriteBtn" class="cv-fav-btn-inline browse-fav-toggle" title="Add to favorites on CharaVault"><i class="fa-regular fa-heart"></i></span>
                         </p>
                     </div>
                 </div>
@@ -1534,9 +1465,6 @@ class CharaVaultBrowseView extends BrowseView {
                     <a id="cvOpenInBrowserBtn" aria-label="Open card image" href="#" target="_blank" rel="noopener" class="cl-btn cl-btn-secondary" title="Open the card image on CharaVault. The site has no page per card; 18+ cards need you logged in there">
                         <i class="fa-solid fa-image"></i><span class="cv-btn-label"> Image</span>
                     </a>
-                    <button id="cvFavBtn" type="button" aria-label="Favorite" aria-pressed="false" class="cl-btn cl-btn-secondary cv-fav-btn" title="Add to your CharaVault favorites" hidden>
-                        <i class="fa-regular fa-heart"></i><span class="cv-btn-label"> Favorite</span>
-                    </button>
                     <button id="cvDownloadBtn" class="cl-btn cl-btn-primary" title="Import into your library">
                         <i class="fa-solid fa-download"></i> Import
                     </button>
@@ -1725,7 +1653,6 @@ class CharaVaultBrowseView extends BrowseView {
         cvSortMode = 'most_downloaded';
         cvLorebookMode = 'any';
         cvTagFilters = new Set();
-        cvFavoritesMode = false;
         for (const k of Object.keys(cvFeatureState)) cvFeatureState[k] = false;
         // a rebuilt DOM needs its listeners back even when deactivate() never ran
         delegatesInitialized = false;
@@ -1746,11 +1673,7 @@ class CharaVaultBrowseView extends BrowseView {
     get gridElementId() { return 'cvGrid'; }
 
     onActivated(isReEntry) {
-        if (isReEntry) {
-            delegatesInitialized = true;
-            // coming back from Settings may have changed the login
-            void refreshCvAccount();
-        }
+        if (isReEntry) delegatesInitialized = true;
     }
 
     closePreview() {

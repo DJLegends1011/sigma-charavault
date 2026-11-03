@@ -1,0 +1,307 @@
+/* ============================================
+   CharaVault Extension CSS
+   Ported from AdamsGH's CharaVault PR #18 (charavault-browse.css), plus styles for the
+   linked-lorebook Import to Shelf button, the similar-controls row and the settings section.
+   Grid layout and card base styles live in the app's browse-shared.css.
+   ============================================ */
+
+/* NSFW 3-state toggle: SFW only (default), NSFW only, NSFW + SFW */
+#cvNsfwToggle.nsfw-active {
+    background: rgba(231, 76, 60, 0.25);
+    border-color: rgba(231, 76, 60, 0.5);
+    color: #e74c3c;
+}
+
+#cvNsfwToggle.nsfw-any {
+    background: rgba(155, 89, 182, 0.22);
+    border-color: rgba(155, 89, 182, 0.5);
+    color: #c39bd3;
+}
+
+/* Tags dropdown filter layout */
+#cvTagsDropdown .browse-tags-list {
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+/* Feature filters (lorebook tri-state + library rows) */
+#cvFiltersDropdown {
+    width: 240px;
+}
+
+/* Creator banner (shown while the creator filter is active) */
+.cv-creator-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    background: rgba(var(--accent-rgb, 74, 144, 226), 0.08);
+    border: 1px solid rgba(var(--accent-rgb, 74, 144, 226), 0.2);
+    border-radius: 8px;
+    margin-bottom: 10px;
+    gap: 10px;
+}
+
+.cv-creator-banner.hidden {
+    display: none;
+}
+
+.cv-creator-banner-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--font-md);
+    color: var(--text-primary, #e0e0e0);
+}
+
+.cv-creator-banner-content i {
+    color: var(--accent, #4a90e2);
+}
+
+.cv-creator-banner-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Modal stat grid */
+.cv-modal-stats {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+}
+
+.cv-modal-stat {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--font-md);
+    color: var(--text-secondary, #aaa);
+}
+
+.cv-modal-stat i {
+    width: 14px;
+    text-align: center;
+    color: var(--accent, #4a90e2);
+}
+
+/* Token count display */
+.cv-token-count {
+    font-variant-numeric: tabular-nums;
+}
+
+.cv-modal-stat-sub {
+    margin-left: 4px;
+    font-size: 0.85em;
+    color: var(--text-secondary, #888);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Recommended tier box (model class hint) */
+.cv-modal-tier {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    margin: 6px 0 12px;
+    padding: 8px 12px;
+    background: rgba(var(--accent-rgb, 74, 144, 226), 0.06);
+    border-left: 3px solid rgba(var(--accent-rgb, 74, 144, 226), 0.55);
+    border-radius: 4px;
+    font-size: var(--font-md);
+}
+
+.cv-modal-tier[hidden] {
+    display: none;
+}
+
+.cv-modal-tier > i {
+    color: var(--accent, #4a90e2);
+    margin-top: 2px;
+}
+
+.cv-modal-tier-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    line-height: 1.35;
+}
+
+.cv-modal-tier-text strong {
+    color: var(--text-primary);
+}
+
+.cv-modal-tier-preset {
+    margin-top: 2px;
+    font-size: 0.85em;
+    color: var(--text-secondary, #888);
+    font-style: italic;
+}
+
+/* Linked lorebooks list inside the preview modal */
+.cv-linked-books-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.cv-linked-book {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 4px;
+    font-size: var(--font-md);
+}
+
+.cv-linked-book i {
+    color: var(--accent, #4a90e2);
+    width: 14px;
+    text-align: center;
+}
+
+.cv-linked-book-title {
+    color: var(--text-primary, #e0e0e0);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cv-linked-book-meta {
+    color: var(--text-secondary, #888);
+    font-size: 0.85em;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+/* The per-lorebook "Import to Shelf" button */
+.cv-import-linked-book-btn {
+    flex-shrink: 0;
+    font-size: 0.85em;
+    padding: 4px 10px;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.cv-import-linked-book-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+/* Visually similar: controls row, status line, results grid */
+.cv-similar-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 6px 0 10px;
+}
+
+.cv-find-similar-btn {
+    flex-shrink: 0;
+}
+
+.cv-similar-status {
+    color: var(--text-secondary, #888);
+    font-size: 0.9em;
+    line-height: 1.35;
+}
+
+.cv-similar-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 8px;
+}
+
+.cv-similar-card {
+    display: flex;
+    flex-direction: column;
+    cursor: pointer;
+    border-radius: 4px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.03);
+    transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.cv-similar-card:hover {
+    background: rgba(var(--accent-rgb, 74, 144, 226), 0.12);
+    transform: translateY(-1px);
+}
+
+.cv-similar-card-thumb {
+    position: relative;
+}
+
+.cv-similar-card img {
+    width: 100%;
+    aspect-ratio: 2 / 3;
+    object-fit: cover;
+    display: block;
+}
+
+.cv-similar-card-score {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    padding: 2px 6px;
+    font-size: 0.75em;
+    font-weight: 600;
+    background: rgba(0, 0, 0, 0.65);
+    color: #fff;
+    border-radius: 3px;
+    font-variant-numeric: tabular-nums;
+}
+
+.cv-similar-card-name {
+    padding: 4px 6px 0;
+    font-size: 0.85em;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cv-similar-card-creator {
+    padding: 0 6px 4px;
+    font-size: 0.75em;
+    color: var(--text-secondary, #888);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ============================================
+   Settings > Online > CharaVault
+   ============================================ */
+
+details#cvGatewayAdvanced,
+[data-provider="charavault"] details.settings-advanced {
+    margin-top: var(--space-sm, 8px);
+}
+
+details#cvGatewayAdvanced > summary,
+[data-provider="charavault"] details.settings-advanced > summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: var(--font-md);
+    padding: var(--space-xs-sm, 4px) 0;
+    user-select: none;
+}
+
+details#cvGatewayAdvanced > summary:hover,
+[data-provider="charavault"] details.settings-advanced > summary:hover {
+    color: var(--text-primary);
+}
+
+details#cvGatewayAdvanced[open] > summary,
+[data-provider="charavault"] details.settings-advanced[open] > summary {
+    margin-bottom: var(--space-sm, 8px);
+}
+
+details#cvGatewayAdvanced .settings-row,
+[data-provider="charavault"] details.settings-advanced .settings-row {
+    margin-bottom: var(--space-md, 12px);
+}

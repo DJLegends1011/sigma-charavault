@@ -28,6 +28,13 @@ let _cachedLinkNode = null;
 
 const charavaultLorebookView = new LorebookView(charavaultLorebooks);
 
+/** The CharaVault file name a downloaded PNG still carries: browsers add " (1)" to repeats. */
+export function cvDownloadFileName(fileName) {
+    const base = String(fileName || '').split(/[\\/]/).pop().trim();
+    if (!/\.png$/i.test(base)) return '';
+    return base.replace(/\s\(\d+\)(?=\.png$)/i, '');
+}
+
 class CharaVaultProvider extends ProviderBase {
     constructor() {
         super();
@@ -120,6 +127,40 @@ class CharaVaultProvider extends ProviderBase {
             hasGallery: false,
             avatarUrl: this.getResultAvatarUrl({ fullPath: link.fullPath }),
         };
+    }
+
+    /**
+     * A card PNG downloaded from charavault.net and imported as a file: claim it when one search
+     * finds the same card. The site's download keeps the card's own file name
+     * ("d81_Hayami The Sensei.card.png"), which tells same-named cards apart; without it, a unique
+     * name + creator match (never "Unknown", the archive's placeholder) is the only other proof.
+     * Link metadata only: the local PNG keeps every descriptive field.
+     */
+    async enrichUnlinkedImport(cardData, fileName) {
+        const name = String(cardData?.data?.name || '').trim();
+        if (!name) return null;
+        const localFile = cvDownloadFileName(fileName);
+        const localCreator = String(cardData.data.creator || '').trim();
+        const creatorUsable = !!localCreator && localCreator.toLowerCase() !== 'unknown';
+        if (!localFile && !creatorUsable) return null;
+        try {
+            const data = await fetchCvCards({ q: name, limit: 30 });
+            const norm = (s) => String(s || '').toLowerCase().trim();
+            const sameName = (data?.results || []).filter(r => norm(r.name) === norm(name) && r.folder && r.file);
+            let match = localFile ? sameName.find(r => r.file === localFile) : null;
+            if (!match && creatorUsable) {
+                const byCreator = sameName.filter(r => norm(r.creator) === norm(localCreator));
+                if (byCreator.length === 1) match = byCreator[0];
+            }
+            if (!match) return null;
+            const fullPath = cvFullPath(match.folder, match.file);
+            if (!isValidCvPath(fullPath)) return null;
+            this.setLinkInfo(cardData, { id: fullPath, fullPath, pageName: this.getListingName(match) });
+            return { cardData, providerInfo: this.localImportInfo({ id: fullPath, fullPath }) };
+        } catch (e) {
+            api?.debugLog?.('[CharaVaultProvider] enrichUnlinkedImport:', e?.message || e);
+            return null;
+        }
     }
 
     // ── Remote Data ─────────────────────────────────────────

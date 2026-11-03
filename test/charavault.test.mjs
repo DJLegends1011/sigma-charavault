@@ -86,6 +86,12 @@ const MOCK_CARDS = [
     },
 ];
 
+// Two cards sharing one name, as charavault.net has (the archive keeps both copies)
+const TWIN_CARDS = [
+    { file: 'd81_Twin Sensei.card.png', folder: 'janitorai', name: 'Twin Sensei', creator: 'Unknown', tags: [], nsfw: false, description_preview: 'first copy' },
+    { file: 'Twin Sensei_0f1e.png', folder: 'cards', name: 'Twin Sensei', creator: 'sensei_maker', tags: [], nsfw: false, description_preview: 'second copy' },
+];
+
 const MOCK_LOREBOOKS = [
     {
         id: 101,
@@ -222,6 +228,12 @@ const mockUpstream = http.createServer(async (req, res) => {
     if (u.pathname.startsWith('/api/cards/download/')) {
         res.writeHead(200, { 'Content-Type': 'image/png' });
         res.end(basePng);
+        return;
+    }
+
+    if (u.pathname === '/api/cards' && (u.searchParams.get('q') || '').toLowerCase() === 'twin sensei') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ total: TWIN_CARDS.length, limit: 48, offset: 0, results: TWIN_CARDS }));
         return;
     }
 
@@ -846,4 +858,18 @@ test('client extension boots, renders settings & preview modal (with failed rati
     assert.equal(entry0.extensions.selectiveLogic, 2);
     assert.equal(entry0.extensions.case_sensitive, true, 'caseSensitive must map to extensions.case_sensitive');
     assert.equal(entry0.extensions.sticky, 3, 'sticky must be preserved in extensions.sticky');
+
+    // 9. A PNG downloaded from charavault.net and imported as a file links itself (enrichUnlinkedImport)
+    const v1 = (name, creator) => ({ data: { name, creator, extensions: {} } });
+    const byFile = await provider.enrichLocalImport(v1('Twin Sensei', ''), 'd81_Twin Sensei.card (1).png');
+    assert.equal(byFile?.providerInfo.fullPath, 'janitorai/d81_Twin Sensei.card.png', 'the download file name picks the right one of two same-named cards, even with a browser (1) suffix');
+    assert.equal(byFile.cardData.data.extensions.charavault.fullPath, 'janitorai/d81_Twin Sensei.card.png');
+    assert.equal(provider.getLinkInfo(byFile.cardData)?.fullPath, 'janitorai/d81_Twin Sensei.card.png', 'the written link reads back');
+    const byCreator = await provider.enrichLocalImport(v1('Twin Sensei', 'Sensei_Maker'), 'renamed.png');
+    assert.equal(byCreator?.providerInfo.fullPath, 'cards/Twin Sensei_0f1e.png', 'a unique name + creator match links without the file name');
+    assert.equal(await provider.enrichLocalImport(v1('Twin Sensei', 'Unknown'), 'renamed.png'), null, 'the archive placeholder creator "Unknown" is no proof');
+    assert.equal(await provider.enrichLocalImport(v1('Twin Sensei', ''), 'renamed.png'), null, 'a name alone never links');
+    assert.equal(await provider.enrichLocalImport(v1('', 'x'), 'd81_Twin Sensei.card.png'), null);
+    const already = { data: { name: 'Adley', extensions: { charavault: { id: 'cards/Adley_5412114.png', fullPath: 'cards/Adley_5412114.png' } } } };
+    assert.equal((await provider.enrichLocalImport(already, 'x.png'))?.providerInfo.fullPath, 'cards/Adley_5412114.png', 'an already-linked card keeps its link');
 });

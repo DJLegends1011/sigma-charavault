@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 
@@ -152,16 +153,40 @@ export function resolveCvBases(req, ctx) {
     return { apiBase, cdnBase };
 }
 
-export function buildUpstreamHeaders(req, ctx, accept = 'application/json', { includeAuth = true } = {}) {
+const cleanSecret = (v) => String(v || '').trim().replace(/^bearer\s+/i, '').trim();
+
+export function readCredentials(req, ctx) {
+    return {
+        email: String(ctx.setting(req.db, 'email') || '').trim(),
+        appPassword: cleanSecret(ctx.setting(req.db, 'appPassword')),
+        gatewayKey: cleanSecret(ctx.setting(req.db, 'gatewayKey')),
+    };
+}
+
+/**
+ * CharaVault app passwords are not bearer tokens: the app logs in with POST /api/auth/login
+ * ({email, password: cv_...}) and sends the session token it answers as Authorization: Bearer.
+ * `sessionToken` is that login token; a gateway key (charlib-proxy) still rides as-is.
+ */
+export function buildUpstreamHeaders(req, ctx, accept = 'application/json', { includeAuth = true, sessionToken = null } = {}) {
     const headers = { 'User-Agent': USER_AGENT, Accept: accept, Referer: 'https://charavault.net/' };
     if (!includeAuth) return headers;
-    const gwKey = String(ctx.setting(req.db, 'gatewayKey') || '').trim().replace(/^bearer\s+/i, '').trim();
-    const appPw = String(ctx.setting(req.db, 'appPassword') || '').trim().replace(/^bearer\s+/i, '').trim();
-    if (appPw) headers['X-App-Password'] = appPw;
-    if (gwKey) headers.Authorization = 'Bearer ' + gwKey;
-    else if (appPw) headers.Authorization = 'Bearer ' + appPw;
+    const { appPassword, gatewayKey } = readCredentials(req, ctx);
+    if (gatewayKey) {
+        headers.Authorization = 'Bearer ' + gatewayKey;
+        // charlib-proxy reads the user's app password from this header and logs in itself
+        if (appPassword) headers['X-App-Password'] = appPassword;
+    } else if (sessionToken) {
+        headers.Authorization = 'Bearer ' + sessionToken;
+    }
     return headers;
 }
+
+const LOGIN_RETRY_MS = 60 * 1000;
+// per account: { fp, token, user, error, at }
+const sessions = new Map();
+const sessionKey = (req) => req?.userHandle || 'default';
+export function forgetCvSessions() { sessions.clear(); }
 
 function splitFullPath(folder, file, fullPath) {
     if (folder !== undefined && folder !== null && folder !== '' && file !== undefined && file !== null && file !== '') {
@@ -255,22 +280,71 @@ export function register(router, ctx) {
         }
     });
 
+    // POST {apiBase}/auth/login with email + cv_ app password; answers { ok, token, user, status, error }
+    const login = async (req, apiBase, email, appPassword, signal) => {
+        const target = await assertSafeUpstreamUrl(apiBase + '/auth/login', { multiUser: !!ctx.multiUser });
+        const response = await doFetch(target, {
+            method: 'POST',
+            headers: { ...buildUpstreamHeaders(req, ctx, 'application/json', { includeAuth: false }), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password: appPassword }),
+            signal,
+        });
+        const text = await readTextCapped(response, 256 * 1024);
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch { /* not json */ }
+        if (response.ok && data?.token) return { ok: true, token: String(data.token), user: data.user || null, status: response.status };
+        const detail = typeof data?.detail === 'string' ? data.detail
+            : data?.requires_2fa ? 'CharaVault asked for 2FA: use an App Password (cv_...), not your account password'
+            : `HTTP ${response.status}`;
+        return { ok: false, status: response.status, error: detail };
+    };
+
+    // the account's CharaVault session token, logging in once and on a 401 (force)
+    const sessionFor = async (req, { force = false } = {}) => {
+        const { email, appPassword, gatewayKey } = readCredentials(req, ctx);
+        if (gatewayKey || !email || !appPassword) return null;
+        const { apiBase } = resolveCvBases(req, ctx);
+        const fp = crypto.createHash('sha256').update(apiBase + '\n' + email.toLowerCase() + '\n' + appPassword).digest('hex');
+        const key = sessionKey(req);
+        const cur = sessions.get(key);
+        if (cur && cur.fp === fp && !force) {
+            if (cur.token) return cur.token;
+            if (Date.now() - cur.at < LOGIN_RETRY_MS) return null; // recent failure: browse anonymously
+        }
+        const result = await login(req, apiBase, email, appPassword, req._cvSignal).catch(error => ({ ok: false, error: error?.message || String(error) }));
+        sessions.set(key, { fp, token: result.ok ? result.token : null, user: result.user || null, error: result.ok ? null : result.error, at: Date.now() });
+        if (!result.ok) ctx.debugLog?.(req, 'CharaVault login failed:', result.error);
+        return result.ok ? result.token : null;
+    };
+
     const upstream = async (req, subPath, accept = 'application/json') => {
         const { apiBase } = resolveCvBases(req, ctx);
         const target = await assertSafeUpstreamUrl(apiBase + subPath, { multiUser: !!ctx.multiUser });
-        return doFetch(target, {
+        const send = (sessionToken) => doFetch(target, {
             method: 'GET',
-            headers: buildUpstreamHeaders(req, ctx, accept, { includeAuth: true }),
+            headers: buildUpstreamHeaders(req, ctx, accept, { includeAuth: true, sessionToken }),
             signal: req._cvSignal,
         });
+        const token = await sessionFor(req);
+        const response = await send(token);
+        if (response.status === 401 && token) {
+            // the session was revoked or expired: log in again once
+            await response.body?.cancel().catch(() => {});
+            return send(await sessionFor(req, { force: true }));
+        }
+        return response;
     };
 
     const upstreamCdn = async (req, subPath, accept = 'image/webp,image/png,image/*,*/*;q=0.8') => {
-        const { cdnBase } = resolveCvBases(req, ctx);
+        const { apiBase, cdnBase } = resolveCvBases(req, ctx);
         const target = await assertSafeUpstreamUrl(cdnBase + subPath, { multiUser: !!ctx.multiUser });
+        // the session rides only to the API's own host (NSFW thumbnails are blurred without it),
+        // never to a separately configured CDN host
+        const sameHost = new URL(target).hostname === new URL(apiBase).hostname;
+        const token = sameHost ? await sessionFor(req) : null;
         return doFetch(target, {
             method: 'GET',
-            headers: buildUpstreamHeaders(req, ctx, accept, { includeAuth: false }),
+            headers: buildUpstreamHeaders(req, ctx, accept, { includeAuth: !!token, sessionToken: token }),
             signal: req._cvSignal,
         });
     };
@@ -454,5 +528,42 @@ export function register(router, ctx) {
         const id = String(req.params.id || '').trim();
         if (!/^\d{1,12}$/.test(id)) throw httpError(400, 'Invalid lorebook id');
         await relayJson(res, await upstream(req, '/lorebooks/' + encodeURIComponent(id)));
+    });
+
+    // the settings checkmark: logs in with the typed (or saved) email + app password
+    router.post('/auth/check', async (req, res) => {
+        const { ctrl, signal } = makeSignal(res);
+        setSafeHeaders(res);
+        res.set('Cache-Control', 'no-store');
+        try {
+            const saved = readCredentials(req, ctx);
+            const body = req.body && typeof req.body === 'object' ? req.body : {};
+            const email = String(body.email ?? saved.email ?? '').trim().slice(0, 320);
+            const appPassword = cleanSecret(body.appPassword ?? saved.appPassword).slice(0, 256);
+            if (saved.gatewayKey) {
+                return res.json({ ok: false, error: 'A gateway key is set: the gateway logs in for you, so there is nothing to check here' });
+            }
+            if (!email || !appPassword) return res.json({ ok: false, error: 'Enter your CharaVault email and an App Password (cv_...)' });
+            if (!/^cv_/i.test(appPassword)) {
+                return res.json({ ok: false, error: 'That is not an App Password: create one under Account > App Passwords (it starts with cv_)' });
+            }
+            const { apiBase } = resolveCvBases(req, ctx);
+            const result = await login(req, apiBase, email, appPassword, signal);
+            if (!result.ok) return res.json({ ok: false, status: result.status, error: result.error });
+            // a check of the saved values primes the session the proxy uses
+            if (email === saved.email && appPassword === saved.appPassword) {
+                const fp = crypto.createHash('sha256').update(apiBase + '\n' + email.toLowerCase() + '\n' + appPassword).digest('hex');
+                sessions.set(sessionKey(req), { fp, token: result.token, user: result.user, error: null, at: Date.now() });
+            }
+            const user = result.user || {};
+            res.json({
+                ok: true,
+                name: String(user.display_name || user.username || email),
+                nsfwVerified: !!user.nsfw_verified,
+            });
+        } catch (error) {
+            if (ctrl.signal.aborted) return;
+            res.json({ ok: false, error: error?.message || 'Could not reach CharaVault' });
+        }
     });
 }

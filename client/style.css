@@ -305,3 +305,8 @@ details#cvGatewayAdvanced .settings-row,
 [data-provider="charavault"] details.settings-advanced .settings-row {
     margin-bottom: var(--space-md, 12px);
 }
+
+/* login check result under the App Password row */
+#cvLoginStatus[data-state="ok"] { color: var(--success, #4caf50); }
+#cvLoginStatus[data-state="warn"] { color: var(--warning, #e0a800); }
+#cvLoginStatus[data-state="error"] { color: var(--danger, #e05252); }

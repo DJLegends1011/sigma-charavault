@@ -11,6 +11,7 @@
     "server": "server/index.js",
     "style": "client/style.css",
     "settings": {
+        "email": "",
         "appPassword": "",
         "gatewayUrl": "",
         "gatewayCdnUrl": "",

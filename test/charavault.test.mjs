@@ -22,7 +22,7 @@ process.env.CL_ALLOW_PRIVATE_FETCH = 'true';
 const { startSigma, basePng } = await import(pathToFileURL(kitPath).href);
 const pngCardPath = path.resolve(path.dirname(kitPath), '../../server/lib/png-card.js');
 const { writeCardChunks } = await import(pathToFileURL(pngCardPath).href);
-const { resolveCvBases, assertSafeUpstreamUrl } = await import(pathToFileURL(path.join(here, '../server/index.js')).href);
+const { resolveCvBases, assertSafeUpstreamUrl, forgetCvSessions } = await import(pathToFileURL(path.join(here, '../server/index.js')).href);
 
 // ---- Mock CharaVault upstream server (verifies headers, query params, auth, redirects, and CORP)
 const upstreamRequests = [];
@@ -33,6 +33,9 @@ let failLinkedLorebooksMode = false;
 let thumbReturnHtmlMode = false;
 let thumbReturn503Mode = false;
 let redirectTargetUrl = null;
+const loginAttempts = [];
+let sessionCounter = 0;
+let revokeSessionOnce = false;
 
 const MOCK_CARDS = [
     {
@@ -143,7 +146,7 @@ const evilServer = http.createServer((req, res) => {
     res.end(JSON.stringify({ stolen: true }));
 });
 
-const mockUpstream = http.createServer((req, res) => {
+const mockUpstream = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://127.0.0.1');
     upstreamRequests.push({
         method: req.method,
@@ -167,6 +170,30 @@ const mockUpstream = http.createServer((req, res) => {
 
     // Simulate charavault.net's hostile Cross-Origin-Resource-Policy header
     res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
+
+    if (u.pathname === '/api/auth/login' && req.method === 'POST') {
+        let raw = '';
+        for await (const chunk of req) raw += chunk;
+        let body = {};
+        try { body = JSON.parse(raw); } catch { /* bad body */ }
+        loginAttempts.push(body);
+        if (body.email === 'me@example.com' && body.password === 'cv_good_app_pw') {
+            sessionCounter += 1;
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, token: 'sess_' + sessionCounter, user: { display_name: 'Tester', nsfw_verified: true } }));
+            return;
+        }
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ detail: 'Invalid email or password' }));
+        return;
+    }
+
+    if (revokeSessionOnce && u.pathname === '/api/cards' && req.headers.authorization === 'Bearer sess_1') {
+        revokeSessionOnce = false;
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ detail: 'Not authenticated' }));
+        return;
+    }
 
     if (u.pathname === '/favicon.ico') {
         res.writeHead(200, { 'Content-Type': 'image/png' });
@@ -287,6 +314,25 @@ const mockUpstream = http.createServer((req, res) => {
         const folder = decodeURIComponent(detailMatch[1]);
         const file = decodeURIComponent(detailMatch[2]);
         const found = MOCK_CARDS.find(c => c.folder === folder && c.file === file);
+        if (folder === 'nsfwaichat' && file === '2B_flat.png') {
+            // a V1 card: charavault answers its fields flat, with no { spec, data } wrapper
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                entry: { folder, file, name: '2B', creator: '', tags: ['Female'], nsfw: false, description_preview: 'Created by Yorha' },
+                full_metadata: {
+                    name: '2B',
+                    description: 'Created by Yorha, to fight in the 14 machine war.',
+                    personality: '',
+                    scenario: '2B finds a human, wounded and malnourished.',
+                    first_mes: '*I change your bandages again.*',
+                    mes_example: '{{random_user_1}}: Hello, 2B!',
+                    creator_notes: '2B finds you, a human, wounded.',
+                    tags: ['Female'],
+                },
+                recommendations: null,
+            }));
+            return;
+        }
         if (!found) {
             res.writeHead(404, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ detail: 'Card not found' }));
@@ -484,8 +530,55 @@ beforeEach(async () => {
         'ext:charavault:gatewayUrl': `${mockBase}/api`,
         'ext:charavault:gatewayCdnUrl': mockBase,
         'ext:charavault:appPassword': '',
+        'ext:charavault:email': '',
         'ext:charavault:gatewayKey': '',
     });
+    loginAttempts.length = 0;
+    sessionCounter = 0;
+    revokeSessionOnce = false;
+    forgetCvSessions();
+});
+
+test('app password login: email + cv_ token log in once, the session rides as Bearer, a 401 logs in again, and /auth/check reports it', async () => {
+    // no email: no login, no Authorization
+    await me.api('/settings', 'PATCH', { 'ext:charavault:appPassword': 'cv_good_app_pw' });
+    await cvExt('/cards?nsfw=true');
+    assert.equal(loginAttempts.length, 0);
+    assert.equal(upstreamRequests.at(-1).headers.authorization, undefined);
+    assert.equal(upstreamRequests.at(-1).headers['x-app-password'], undefined, 'the raw app password is never sent to the API');
+
+    // the checkmark with the wrong password says why
+    const bad = await me.api('/ext/charavault/auth/check', 'POST', { email: 'me@example.com', appPassword: 'cv_wrong' });
+    assert.equal(bad.body.ok, false);
+    assert.match(bad.body.error, /Invalid email or password/);
+    const notApp = await me.api('/ext/charavault/auth/check', 'POST', { email: 'me@example.com', appPassword: 'hunter2' });
+    assert.equal(notApp.body.ok, false);
+    assert.match(notApp.body.error, /App Password/);
+
+    // saved email + app password: one login, then every request carries the session
+    await me.api('/settings', 'PATCH', { 'ext:charavault:email': 'me@example.com' });
+    const good = await me.api('/ext/charavault/auth/check', 'POST', {});
+    assert.equal(good.body.ok, true);
+    assert.equal(good.body.name, 'Tester');
+    assert.equal(good.body.nsfwVerified, true);
+    const loginsAfterCheck = loginAttempts.length;
+    await cvExt('/cards?nsfw=true');
+    await cvExt('/cards?nsfw=false');
+    assert.equal(loginAttempts.length, loginsAfterCheck, 'the checked session is reused');
+    assert.equal(upstreamRequests.at(-1).headers.authorization, 'Bearer sess_' + sessionCounter);
+
+    // the same-host CDN thumbnail gets the session too (unblurred NSFW thumbs)
+    await me.apiRequest('/ext/charavault/thumb/cards/Adley_5412114.png');
+    assert.equal(upstreamRequests.at(-1).headers.authorization, 'Bearer sess_' + sessionCounter);
+
+    // a revoked session (the cached sess_1 now answers 401): one re-login and a retry
+    const loginsBefore = loginAttempts.length;
+    revokeSessionOnce = true;
+    const retried = await cvExt('/cards');
+    assert.equal(retried.status, 200);
+    assert.equal(loginAttempts.length, loginsBefore + 1, 'exactly one re-login');
+    assert.equal(upstreamRequests.at(-1).headers.authorization, 'Bearer sess_' + sessionCounter);
+    assert.notEqual(upstreamRequests.at(-1).headers.authorization, 'Bearer sess_1');
 });
 
 test('server proxy routes forward queries, attach User-Agent & auth headers, strip CORP, and set sandbox CSP', async () => {
@@ -686,6 +779,22 @@ test('client extension boots, renders settings & preview modal (with failed rati
     assert.equal(tierLabel.textContent, 'Moderate', 'Detail & recommendations must still render even when rating & lorebooks endpoints fail');
     failRatingMode = false;
     failLinkedLorebooksMode = false;
+    // the section reads "Description", like every other provider, not the PR's "Character Definition"
+    assert.equal(page.document.querySelector('[data-section="cvCharDescription"]').dataset.label, 'Description');
+    handle.browseView.closePreview();
+
+    // 5b. A flat V1 full_metadata (no { data } wrapper) still fills every field, and the
+    // creator's notes are the notes, not the description preview
+    await provider.openPreview({ folder: 'nsfwaichat', file: '2B_flat.png', name: '2B', description_preview: 'Created by Yorha', fullPath: 'nsfwaichat/2B_flat.png' });
+    await new Promise(r => setTimeout(r, 50));
+    for (const id of ['cvCharDescriptionSection', 'cvCharScenarioSection', 'cvCharFirstMsgSection', 'cvCharExamplesSection']) {
+        assert.equal(page.document.getElementById(id).hidden, false, `${id} must show for a flat V1 card`);
+    }
+    assert.equal(page.document.getElementById('cvCharPersonalitySection').hidden, true, 'an empty personality stays hidden');
+    const flatCard = await provider.fetchRemoteCard({ fullPath: 'nsfwaichat/2B_flat.png' });
+    assert.equal(flatCard.data.description, 'Created by Yorha, to fight in the 14 machine war.');
+    assert.equal(flatCard.data.creator_notes, '2B finds you, a human, wounded.');
+    assert.equal(flatCard.data.mes_example, '{{random_user_1}}: Hello, 2B!');
     handle.browseView.closePreview();
 
     // 6. Verify full character import into Project Σ library

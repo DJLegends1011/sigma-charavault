@@ -42,7 +42,13 @@ export function getCvApiBase() { return '/ext/charavault'; }
 // Credentials stay on the server; apiRequest supplies the Project Σ session.
 export function getCvHeaders() { return { Accept: 'application/json' }; }
 function serverUrl(p) { return typeof CoreAPI?.serverUrl === 'function' ? CoreAPI.serverUrl(p) : p; }
-export function cvThumbUrl(folder, file) { return serverUrl('/api/ext/charavault/thumb/' + encodeURIComponent(folder) + '/' + encodeURIComponent(file)); }
+// `a` keys the browser cache to the login state: thumbnails cached blurred while logged out must not stick
+function cvAuthTag() {
+    const get = dependencies.getSetting;
+    if (typeof get !== 'function') return '0';
+    return get('email') && get('appPassword') ? '1' : '0';
+}
+export function cvThumbUrl(folder, file) { return serverUrl('/api/ext/charavault/thumb/' + encodeURIComponent(folder) + '/' + encodeURIComponent(file) + '?a=' + cvAuthTag()); }
 export function cvPreviewPageUrl(folder, file) { return 'https://charavault.net/cards/preview/' + encodeURIComponent(folder) + '/' + encodeURIComponent(file); }
 export function cvFullPath(folder, file) { return `${folder}/${file}`; }
 export function splitCvPath(fullPath) {
@@ -69,6 +75,34 @@ function request(path, signal = null, accept = null) {
     return apiRequest(getCvApiBase() + path, 'GET', null, { headers, signal });
 }
 async function requestJson(path, signal) { return readJsonClassified(await request(path, signal)); }
+
+/**
+ * CharaVault's full_metadata arrives in two shapes: a V2/V3 card ({spec, data:{...}}) or a flat
+ * V1 card whose fields sit at the top level (e.g. nsfwaichat/2B). Always answer { data: {...} }.
+ */
+export function normalizeCvFullMetadata(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    if (raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data)) return raw;
+    return { spec: raw.spec || 'chara_card_v1', data: raw };
+}
+
+/**
+ * Check CharaVault credentials. Uses the typed values when given, the saved ones otherwise.
+ * Answers { ok, name, nsfwVerified, error }.
+ */
+export async function checkCvLogin({ email, appPassword } = {}) {
+    const api = dependencies.CoreAPI || CoreAPI;
+    const apiRequest = dependencies.apiRequest || api.apiRequest?.bind(api);
+    if (typeof apiRequest !== 'function') throw new Error('Project Σ apiRequest is unavailable');
+    const body = {};
+    if (email) body.email = email;
+    if (appPassword) body.appPassword = appPassword;
+    const resp = await apiRequest(getCvApiBase() + '/auth/check', 'POST', body, { headers: { Accept: 'application/json' } });
+    let data = null;
+    try { data = await resp.json(); } catch { /* fall through */ }
+    if (!data || typeof data !== 'object') return { ok: false, error: `HTTP ${resp.status}` };
+    return data;
+}
 export async function fetchCvCardPngBuffer(folder, file, { signal = null } = {}) {
     const resp = await request('/cards/download/' + encodeURIComponent(folder) + '/' + encodeURIComponent(file), signal, 'image/png,image/*,*/*;q=0.8');
     if (!resp.ok) return null;
@@ -98,7 +132,7 @@ export async function fetchCvCardDetail(fullPath, { strict = false, signal = nul
     }
     try {
         const data = await requestJson('/cards/detail?' + paramsQuery(splitCvPath(fullPath)), signal);
-        const detail = { entry: data.entry || null, fullMetadata: data.full_metadata || null, recommendations: data.recommendations || null };
+        const detail = { entry: data.entry || null, fullMetadata: normalizeCvFullMetadata(data.full_metadata), recommendations: data.recommendations || null };
         while (cvMetadataCache.size >= CV_METADATA_CACHE_MAX) {
             const firstKey = cvMetadataCache.keys().next().value;
             cvMetadataCache.delete(firstKey);

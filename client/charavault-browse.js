@@ -680,7 +680,8 @@ async function openCvPreview(char) {
         // Creator's notes
         if (notesSection && notesEl) {
             cleanupCreatorNotesContainer?.(notesEl);
-            const notes = meta.creator_notes || char.description_preview || '';
+            // never fall back to description_preview: that is the description, not the creator's notes
+            const notes = meta.creator_notes || '';
             if (String(notes).trim()) {
                 notesSection.hidden = false;
                 if (!notesEl.querySelector('iframe')) notesEl.innerHTML = skeletonLines(3);
@@ -1400,10 +1401,10 @@ class CharaVaultBrowseView extends BrowseView {
                     <div id="cvCharCreatorNotes" class="scrolling-text"></div>
                 </div>
 
-                <!-- Character Definition (V2 "description" - the prompt) -->
+                <!-- Description (V2 "description"), labelled like every other provider -->
                 <div class="browse-char-section" id="cvCharDescriptionSection" hidden>
-                    <h3 class="browse-section-title" data-section="cvCharDescription" data-label="Character Definition" data-icon="fa-solid fa-scroll" title="Click to expand">
-                        <i class="fa-solid fa-scroll"></i> Character Definition
+                    <h3 class="browse-section-title" data-section="cvCharDescription" data-label="Description" data-icon="fa-solid fa-scroll" title="Click to expand">
+                        <i class="fa-solid fa-scroll"></i> Description
                     </h3>
                     <div id="cvCharDescription" class="scrolling-text"></div>
                 </div>

@@ -2,7 +2,7 @@
 // section into Project Σ. The API half (client/charavault-api.js) and the server proxy
 // (server/index.js) are owned by their own modules.
 
-import { initCvApi, cvMetadataCache } from './charavault-api.js';
+import { initCvApi, cvMetadataCache, checkCvLogin } from './charavault-api.js';
 import charavaultProvider from './charavault-provider.js';
 import charavaultBrowseView, {
     setCvSettings,
@@ -28,12 +28,18 @@ function buildCvSettingsSection(ctx, el) {
         <div class="settings-group">
             <div class="settings-group-title"><i class="fa-solid fa-key"></i> Authentication</div>
             <div class="settings-row">
+                <label for="settingsCharavaultEmail">Email</label>
+                <input type="email" id="settingsCharavaultEmail" class="glass-input" placeholder="you@example.com" autocomplete="off">
+            </div>
+            <div class="settings-row">
                 <label for="settingsCharavaultAppPassword">App Password</label>
                 <div class="settings-input-group">
                     <input type="password" id="settingsCharavaultAppPassword" class="glass-input" placeholder="cv_..." autocomplete="new-password" data-sensitive="true">
                     <button type="button" class="glass-btn icon-only" id="toggleCharavaultAppPasswordVisibility" title="Show/Hide"><i class="fa-solid fa-eye"></i></button>
+                    <button type="button" class="glass-btn icon-only" id="validateCharavaultBtn" title="Check the email and app password"><i class="fa-solid fa-check"></i></button>
                 </div>
-                <span class="settings-hint">Optional. CharaVault app password (cv_...) for higher rate limits, 18+ NSFW access, and card downloads. Generate one under Account &gt; App Passwords on <a href="https://charavault.net" target="_blank" rel="noopener">charavault.net</a>.</span>
+                <span class="settings-hint">Optional. Your CharaVault account email plus an App Password (cv_...) for 18+ NSFW cards, unblurred thumbnails and 2&times; rate limits. Create one under Account &gt; App Passwords on <a href="https://charavault.net" target="_blank" rel="noopener">charavault.net</a>; the account must be age-verified for NSFW. The password is only sent to CharaVault's login, never to the page.</span>
+                <span class="settings-hint" id="cvLoginStatus" hidden></span>
             </div>
         </div>
 
@@ -79,6 +85,8 @@ function buildCvSettingsSection(ctx, el) {
     };
 
     // populate from the extension's settings
+    const email = findEl('settingsCharavaultEmail');
+    if (email) email.value = ctx.settings.get('email') || '';
     const appPassword = findEl('settingsCharavaultAppPassword');
     if (appPassword) appPassword.value = ctx.settings.get('appPassword') || '';
     const gatewayUrl = findEl('settingsCharavaultGatewayUrl');
@@ -93,6 +101,7 @@ function buildCvSettingsSection(ctx, el) {
         findEl('cvGatewayAdvanced')?.setAttribute('open', '');
     }
 
+    persist('settingsCharavaultEmail', 'email');
     persist('settingsCharavaultAppPassword', 'appPassword');
     persist('settingsCharavaultGatewayUrl', 'gatewayUrl');
     persist('settingsCharavaultGatewayCdnUrl', 'gatewayCdnUrl');
@@ -100,6 +109,58 @@ function buildCvSettingsSection(ctx, el) {
 
     wireVisibilityToggle(el, 'toggleCharavaultAppPasswordVisibility', 'settingsCharavaultAppPassword');
     wireVisibilityToggle(el, 'toggleCharavaultGatewayKeyVisibility', 'settingsCharavaultGatewayKey');
+    wireLoginCheck(ctx, findEl);
+}
+
+// the checkmark: logs in with what is typed (saved or not) and says who it is and whether NSFW is on
+function wireLoginCheck(ctx, findEl) {
+    const btn = findEl('validateCharavaultBtn');
+    const status = findEl('cvLoginStatus');
+    if (!btn) return;
+    const toast = (msg, type) => (ctx.ui?.toast || window.showToast)?.(msg, type);
+    const icon = (name) => `<i class="fa-solid fa-${name}"></i>`;
+    const say = (text, kind) => {
+        if (!status) return;
+        status.hidden = !text;
+        status.textContent = text || '';
+        status.dataset.state = kind || '';
+    };
+    btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        btn.classList.remove('success', 'error');
+        btn.innerHTML = icon('spinner fa-spin');
+        btn.disabled = true;
+        try {
+            const result = await checkCvLogin({
+                email: String(findEl('settingsCharavaultEmail')?.value || '').trim(),
+                appPassword: String(findEl('settingsCharavaultAppPassword')?.value || '').trim(),
+            });
+            if (result.ok) {
+                btn.classList.add('success');
+                const nsfw = result.nsfwVerified ? 'NSFW enabled' : 'account is not age-verified, so NSFW stays hidden';
+                say(`Logged in as ${result.name} (${nsfw}).`, result.nsfwVerified ? 'ok' : 'warn');
+                toast(`Logged in to CharaVault as ${result.name}`, 'success');
+                // the session changes what every cached answer and thumbnail shows
+                cvMetadataCache.clear();
+            } else {
+                btn.classList.add('error');
+                btn.innerHTML = icon('times');
+                say(result.error || 'Login failed', 'error');
+                toast(`CharaVault: ${result.error || 'login failed'}`, 'error');
+            }
+        } catch (err) {
+            btn.classList.add('error');
+            btn.innerHTML = icon('exclamation');
+            say(`Could not check: ${err.message}`, 'error');
+        } finally {
+            btn.disabled = false;
+            if (btn.classList.contains('success')) btn.innerHTML = icon('check');
+            setTimeout(() => {
+                btn.classList.remove('success', 'error');
+                btn.innerHTML = icon('check');
+            }, 3000);
+        }
+    });
 }
 
 export default {

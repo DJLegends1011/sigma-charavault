@@ -313,3 +313,31 @@ details#cvGatewayAdvanced .settings-row,
 
 /* Card modal header: Copy link + Image + Import + close wrap onto two lines on phones; keep the two secondary actions icon-only there */
 html.cl-mobile #cvCharModal .modal-controls .cv-btn-label { display: none; }
+
+/* Account bar: login state + Favorites, above the grid (shown on phones too, unlike the filter bar) */
+.cv-account-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+.cv-account-btn {
+    min-width: 0;
+    max-width: 100%;
+}
+.cv-account-btn span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.cv-account-btn[data-state="in"] i { color: var(--success, #4caf50); }
+.cv-account-btn[data-state="warn"] i { color: var(--warning, #e0a800); }
+.cv-account-btn[data-state="error"] i { color: var(--danger, #e05252); }
+.cv-account-btn[data-state="checking"] { opacity: 0.7; }
+.cv-favorites-toggle.active,
+.cv-fav-btn.active {
+    color: var(--danger, #e05252);
+    border-color: rgba(224, 82, 82, 0.5);
+}

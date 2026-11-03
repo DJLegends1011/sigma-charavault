@@ -23,6 +23,7 @@ import {
     fetchCvRevisionPngBuffer,
     readCvCardFromPng,
     normalizeCvFullMetadata,
+    hasCvCredentials,
 } from './charavault-api.js';
 
 let api = null;
@@ -71,6 +72,21 @@ class CharaVaultProvider extends ProviderBase {
             globalThis.window.cvImportCharacter = (fullPath, hitData, options) =>
                 this.importCharacter(fullPath, hitData, options);
         }
+    }
+
+    // ── Account ─────────────────────────────────────────────
+
+    /** A login is saved (whether it still works is the account bar's live check). */
+    get isAuthenticated() { return hasCvCredentials(); }
+
+    /** The login lives in Settings > Online > CharaVault: open it there, expanded. */
+    openAuthUI() {
+        (this._coreAPI || api)?.openSettingsToSection?.('online', () => {
+            const section = document.querySelector('details.settings-provider-section[data-provider="charavault"]');
+            if (!section) return;
+            section.open = true;
+            section.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+        });
     }
 
     // ── Character Linking ───────────────────────────────────

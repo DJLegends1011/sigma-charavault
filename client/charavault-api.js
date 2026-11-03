@@ -69,14 +69,42 @@ function paramsQuery(params) {
     }
     return qs.toString();
 }
-function request(path, signal = null, accept = null) {
+function request(path, signal = null, accept = null, method = 'GET') {
     const api = dependencies.CoreAPI || CoreAPI;
     const apiRequest = dependencies.apiRequest || api.apiRequest?.bind(api);
     const headers = accept ? { ...getCvHeaders(), Accept: accept } : getCvHeaders();
     if (typeof apiRequest !== 'function') throw new Error('Project Σ apiRequest is unavailable');
-    return apiRequest(getCvApiBase() + path, 'GET', null, { headers, signal });
+    return apiRequest(getCvApiBase() + path, method, null, { headers, signal });
 }
 async function requestJson(path, signal) { return readJsonClassified(await request(path, signal)); }
+
+// ── Account ──────────────────────────────────────────────
+
+/** Whether a login is saved at all (email + app password, or a gateway key): no network. */
+export function hasCvCredentials() {
+    const get = dependencies.getSetting;
+    if (typeof get !== 'function') return false;
+    return !!(get('gatewayKey') || (get('email') && get('appPassword')));
+}
+/** The saved login's state: { configured, loggedIn, name, nsfwVerified, gateway, error }. */
+export async function fetchCvAuthStatus({ signal = null } = {}) {
+    return requestJson('/auth/status', signal);
+}
+/** The account's favorites: { total, cards: [card rows like search results] }. */
+export async function fetchCvFavorites({ limit = 48, offset = 0, signal = null } = {}) {
+    return requestJson('/favorites?' + paramsQuery({ limit, offset }), signal);
+}
+/** Whether the card is one of the account's favorites. */
+export async function checkCvFavorite(fullPath, { signal = null } = {}) {
+    const data = await requestJson('/favorites/check?path=' + encodeURIComponent(fullPath), signal);
+    return !!data?.is_favorite;
+}
+/** Add (on) or remove a favorite; answers the state CharaVault reports back. */
+export async function setCvFavorite(fullPath, on) {
+    const resp = await request('/favorites?path=' + encodeURIComponent(fullPath), null, null, on ? 'POST' : 'DELETE');
+    const data = await readJsonClassified(resp);
+    return !!data?.favorited;
+}
 
 /**
  * CharaVault's full_metadata arrives in two shapes: a V2/V3 card ({spec, data:{...}}) or a flat

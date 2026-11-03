@@ -38,6 +38,7 @@ let redirectTargetUrl = null;
 const loginAttempts = [];
 let sessionCounter = 0;
 let revokeSessionOnce = false;
+const favoritePaths = new Set();
 
 const MOCK_CARDS = [
     {
@@ -257,6 +258,30 @@ const mockUpstream = http.createServer(async (req, res) => {
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ total: list.length, limit: 48, offset: 0, results: list }));
+        return;
+    }
+
+    if (u.pathname === '/api/favorites' || u.pathname === '/api/favorites/check') {
+        // the account's own list: a session is required, as on charavault.net
+        if (!/^Bearer sess_\d+$/.test(String(req.headers.authorization || ''))) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ detail: 'Not authenticated' }));
+            return;
+        }
+        const p = u.searchParams.get('path');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        if (u.pathname === '/api/favorites/check') {
+            res.end(JSON.stringify({ is_favorite: favoritePaths.has(p) }));
+        } else if (req.method === 'POST') {
+            favoritePaths.add(p);
+            res.end(JSON.stringify({ favorited: true }));
+        } else if (req.method === 'DELETE') {
+            favoritePaths.delete(p);
+            res.end(JSON.stringify({ favorited: false }));
+        } else {
+            const cards = MOCK_CARDS.filter(c => favoritePaths.has(`${c.folder}/${c.file}`));
+            res.end(JSON.stringify({ total: cards.length, cards }));
+        }
         return;
     }
 
@@ -618,6 +643,46 @@ test('app password login: email + cv_ token log in once, the session rides as Be
     assert.notEqual(upstreamRequests.at(-1).headers.authorization, 'Bearer sess_1');
 });
 
+test('account status and favorites: the status names the login, favorites need it, and add/remove round-trip', async () => {
+    favoritePaths.clear();
+    // no login saved
+    let status = await cvExt('/auth/status');
+    assert.equal(status.status, 200);
+    assert.deepEqual(status.body, { configured: false, loggedIn: false });
+    assert.equal((await cvExt('/favorites')).status, 401, 'favorites without a login answer CharaVault\'s 401');
+
+    // a working login
+    await me.api('/settings', 'PATCH', { 'ext:charavault:email': 'me@example.com', 'ext:charavault:appPassword': 'cv_good_app_pw' });
+    status = await cvExt('/auth/status');
+    assert.equal(status.body.loggedIn, true);
+    assert.equal(status.body.name, 'Tester');
+    assert.equal(status.body.nsfwVerified, true);
+
+    const adley = encodeURIComponent('cards/Adley_5412114.png');
+    assert.equal((await cvExt('/favorites/check?path=' + adley)).body.is_favorite, false);
+    const added = await cvExt('/favorites?path=' + adley, 'POST');
+    assert.equal(added.status, 200);
+    assert.equal(added.body.favorited, true);
+    assert.equal(upstreamRequests.at(-1).method, 'POST');
+    assert.equal(upstreamRequests.at(-1).searchParams.path, 'cards/Adley_5412114.png');
+    assert.equal((await cvExt('/favorites/check?path=' + adley)).body.is_favorite, true);
+    const list = await cvExt('/favorites?limit=48&offset=0');
+    assert.equal(list.body.total, 1);
+    assert.equal(list.body.cards[0].name, 'Adley');
+    const removed = await cvExt('/favorites?path=' + adley, 'DELETE');
+    assert.equal(removed.body.favorited, false);
+    assert.equal(upstreamRequests.at(-1).method, 'DELETE');
+    assert.equal((await cvExt('/favorites?path=' + encodeURIComponent('../auth/me'), 'POST')).status, 400, 'a traversal path never reaches CharaVault');
+
+    // a wrong app password: configured, not logged in, and why
+    forgetCvSessions();
+    await me.api('/settings', 'PATCH', { 'ext:charavault:appPassword': 'cv_wrong' });
+    status = await cvExt('/auth/status');
+    assert.equal(status.body.configured, true);
+    assert.equal(status.body.loggedIn, false);
+    assert.equal(status.body.error, 'Invalid email or password');
+});
+
 test('server proxy routes forward queries, attach User-Agent & auth headers, strip CORP, and set sandbox CSP', async () => {
     // 1. Unit check for resolveCvBases derivation (/v1/cv -> /v1/cv-cdn, /api stripping, CDN override)
     const mockCtx = (map) => ({ setting: (_db, k) => map[k] || '' });
@@ -762,6 +827,14 @@ test('client extension boots, renders settings & preview modal (with failed rati
         return found ? (found.v3 || found.v2) : null;
     };
     await page.boot();
+    // the app's on(id, event, handler) (library.js), which CoreAPI.onElement calls: without it
+    // every button the browse view wires by id would be inert here
+    globalThis.window.onElement = (id, event, handler) => {
+        const el = page.document.getElementById(id);
+        if (!el) return false;
+        el.addEventListener(event, handler);
+        return true;
+    };
 
     // 1. Verify global handle, host registration log, and provider manifest registration
     assert.deepEqual(page.log.providersIn, ['charavault']);
@@ -920,4 +993,59 @@ test('client extension boots, renders settings & preview modal (with failed rati
     assert.equal(r1.first_mes, 'Halt.');
     assert.equal(await provider.fetchVersionData({ fullPath: 'cards/Adley_5412114.png' }, 'r9-99'), null, 'a refused revision answers null');
     assert.equal(await provider.fetchVersionData({ fullPath: 'cards/Adley_5412114.png' }, '../x'), null);
+
+    // 11. Account bar + favorites, through the real browse DOM
+    const waitFor = async (check, what) => {
+        for (let i = 0; i < 100; i++) { if (check()) return; await new Promise(r => setTimeout(r, 10)); }
+        assert.fail(`timed out waiting for ${what} (last toasts: ${JSON.stringify(page.log.toasts.slice(-2))})`);
+    };
+    const $ = (id) => page.document.getElementById(id);
+    favoritePaths.clear();
+    // logged out: the bar offers the login, Favorites stays hidden
+    await handle.refreshAccount();
+    assert.equal($('cvAccountLabel').textContent, 'Log in for 18+ cards & favorites');
+    assert.equal($('cvFavoritesBtn').hidden, true);
+    assert.equal(provider.isAuthenticated, false);
+    // log in: the server reads its settings, the page its own (typed into Settings like a user would)
+    await me.api('/settings', 'PATCH', { 'ext:charavault:email': 'me@example.com', 'ext:charavault:appPassword': 'cv_good_app_pw' });
+    for (const [id, value] of [['settingsCharavaultEmail', 'me@example.com'], ['settingsCharavaultAppPassword', 'cv_good_app_pw']]) {
+        $(id).value = value;
+        $(id).dispatchEvent(new Event('change'));
+    }
+    assert.equal(provider.isAuthenticated, true);
+    await handle.refreshAccount();
+    assert.equal($('cvAccountLabel').textContent, 'Logged in as Tester');
+    assert.equal($('cvAccountBtn').dataset.state, 'in');
+    assert.equal($('cvFavoritesBtn').hidden, false);
+
+    // the preview's heart: shown, reads CharaVault's state, and toggles it
+    await provider.openPreview({ ...MOCK_CARDS[0], fullPath: 'cards/Adley_5412114.png' });
+    assert.equal($('cvFavBtn').hidden, false);
+    await waitFor(() => $('cvFavBtn').dataset.fav === 'false', 'the favorite check');
+    $('cvFavBtn').click();
+    await waitFor(() => $('cvFavBtn').dataset.fav === 'true', 'the favorite to be added');
+    assert.ok(favoritePaths.has('cards/Adley_5412114.png'));
+    handle.browseView.closePreview();
+
+    // Favorites mode: the grid is the account's list
+    $('cvFavoritesBtn').click();
+    assert.equal($('cvFavoritesBtn').getAttribute('aria-pressed'), 'true');
+    await waitFor(() => $('cvGrid').querySelectorAll('.browse-card').length === 1, 'the favorites grid');
+    assert.equal($('cvGrid').querySelector('.browse-card').dataset.fullPath, 'cards/Adley_5412114.png');
+    // un-favoriting from the preview takes the card out of the favorites grid
+    await provider.openPreview({ ...MOCK_CARDS[0], fullPath: 'cards/Adley_5412114.png' });
+    await waitFor(() => $('cvFavBtn').dataset.fav === 'true', 'the favorite check');
+    $('cvFavBtn').click();
+    await waitFor(() => $('cvFavBtn').dataset.fav === 'false', 'the favorite to be removed');
+    assert.equal($('cvGrid').querySelectorAll('.browse-card').length, 0);
+    handle.browseView.closePreview();
+
+    // logging out leaves Favorites
+    await me.api('/settings', 'PATCH', { 'ext:charavault:email': '', 'ext:charavault:appPassword': '' });
+    $('settingsCharavaultAppPassword').value = '';
+    $('settingsCharavaultAppPassword').dispatchEvent(new Event('change'));
+    await handle.refreshAccount();
+    assert.equal($('cvFavoritesBtn').hidden, true);
+    assert.equal($('cvFavoritesBtn').getAttribute('aria-pressed'), 'false', 'a lost login switches Favorites off');
+    await waitFor(() => $('cvGrid').querySelectorAll('.browse-card').length > 0, 'the catalog grid to come back');
 });

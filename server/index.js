@@ -267,7 +267,7 @@ export function register(router, ctx) {
         ? ctx.helpers.sameHostFetch(url, init)
         : fetch(url, { ...init, redirect: 'error' }));
 
-    const route = (routePath, handler) => router.get(routePath, async (req, res) => {
+    const handle = (handler) => async (req, res) => {
         const { ctrl, signal } = makeSignal(res);
         req._cvSignal = signal;
         try {
@@ -278,7 +278,8 @@ export function register(router, ctx) {
             setSafeHeaders(res);
             res.status(status).json({ error: error?.message || 'CharaVault upstream request failed' });
         }
-    });
+    };
+    const route = (routePath, handler) => router.get(routePath, handle(handler));
 
     // POST {apiBase}/auth/login with email + cv_ app password; answers { ok, token, user, status, error }
     const login = async (req, apiBase, email, appPassword, signal) => {
@@ -317,11 +318,11 @@ export function register(router, ctx) {
         return result.ok ? result.token : null;
     };
 
-    const upstream = async (req, subPath, accept = 'application/json') => {
+    const upstream = async (req, subPath, accept = 'application/json', method = 'GET') => {
         const { apiBase } = resolveCvBases(req, ctx);
         const target = await assertSafeUpstreamUrl(apiBase + subPath, { multiUser: !!ctx.multiUser });
         const send = (sessionToken) => doFetch(target, {
-            method: 'GET',
+            method,
             headers: buildUpstreamHeaders(req, ctx, accept, { includeAuth: true, sessionToken }),
             signal: req._cvSignal,
         });
@@ -546,6 +547,42 @@ export function register(router, ctx) {
         if (!/^\d{1,12}$/.test(id)) throw httpError(400, 'Invalid lorebook id');
         await relayJson(res, await upstream(req, '/lorebooks/' + encodeURIComponent(id)));
     });
+
+    // who the saved login is, for the browse view's account bar (the session is cached, so this is cheap)
+    route('/auth/status', async (req, res) => {
+        setSafeHeaders(res);
+        res.set('Cache-Control', 'no-store');
+        const { email, appPassword, gatewayKey } = readCredentials(req, ctx);
+        // a gateway logs in by itself: there is no session here to report on
+        if (gatewayKey) return res.json({ configured: true, loggedIn: true, gateway: true, name: null, nsfwVerified: null });
+        if (!email || !appPassword) return res.json({ configured: false, loggedIn: false });
+        const token = await sessionFor(req);
+        const cur = sessions.get(sessionKey(req));
+        const user = cur?.user || {};
+        res.json({
+            configured: true,
+            loggedIn: !!token,
+            name: token ? String(user.display_name || user.username || email) : null,
+            nsfwVerified: token ? !!user.nsfw_verified : null,
+            error: token ? null : (cur?.error || 'Login failed'),
+        });
+    });
+
+    // favorites: the account's list, one card's state, and adding (POST) / removing (DELETE) a card
+    route('/favorites', async (req, res) => {
+        const qs = queryString(req.query, ['limit', 'offset']);
+        await relayJson(res, await upstream(req, '/favorites' + (qs ? `?${qs}` : '')));
+    });
+    route('/favorites/check', async (req, res) => {
+        res.set('Cache-Control', 'no-store');
+        await relayJson(res, await upstream(req, '/favorites/check?path=' + pathParam(req)));
+    });
+    const setFavorite = handle(async (req, res) => {
+        res.set('Cache-Control', 'no-store');
+        await relayJson(res, await upstream(req, '/favorites?path=' + pathParam(req), 'application/json', req.method));
+    });
+    router.post('/favorites', setFavorite);
+    router.delete('/favorites', setFavorite);
 
     // the settings checkmark: logs in with the typed (or saved) email + app password
     router.post('/auth/check', async (req, res) => {

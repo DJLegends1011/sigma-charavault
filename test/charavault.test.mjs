@@ -12,6 +12,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const kitPath = [
+    // SIGMA_DIR=~/ProjectSigma-main for checkouts that sit elsewhere (e.g. a git worktree)
+    process.env.SIGMA_DIR && path.resolve(process.env.SIGMA_DIR, 'tools/extension-kit/index.mjs'),
     path.resolve(here, '../../../../ProjectSigma-main/tools/extension-kit/index.mjs'),
     path.resolve(here, '../../../../../ProjectSigma-main/tools/extension-kit/index.mjs'),
 ].find(p => fs.existsSync(p));
@@ -744,6 +746,10 @@ test('client extension boots, renders settings & preview modal (with failed rati
     assert.equal(provider.parseUrl('https://charavault.net/cards/preview/../auth'), null, 'parseUrl must reject .. traversal');
     assert.equal(provider.parseUrl('https://charavault.net/cards/preview/cards/%E0%A4%A'), null, 'parseUrl must not throw on malformed percent-encoding');
     assert.equal(provider.readLink({ id: '../auth' }), null, 'readLink must reject traversal paths in crafted cards');
+    // charavault.net has no per-card page: the link is the card file URL, and it must read back as the same card
+    const cardLink = provider.getCharacterUrl({ fullPath: 'janitorai/d81_Hayami The Sensei.card.png' });
+    assert.equal(cardLink, 'https://charavault.net/cards/janitorai/d81_Hayami%20The%20Sensei.card.png');
+    assert.equal(provider.parseUrl(cardLink), 'janitorai/d81_Hayami The Sensei.card.png', 'getCharacterUrl must round-trip through parseUrl');
 
     // 4. Verify remote card & linked lorebook resolution + transient failure handling (_lorebookUnread)
     const remoteCard = await provider.fetchRemoteCard({ fullPath: 'cards/Adley_5412114.png' });

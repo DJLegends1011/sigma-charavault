@@ -49,7 +49,9 @@ function cvAuthTag() {
     return get('email') && get('appPassword') ? '1' : '0';
 }
 export function cvThumbUrl(folder, file) { return serverUrl('/api/ext/charavault/thumb/' + encodeURIComponent(folder) + '/' + encodeURIComponent(file) + '?a=' + cvAuthTag()); }
-export function cvPreviewPageUrl(folder, file) { return 'https://charavault.net/cards/preview/' + encodeURIComponent(folder) + '/' + encodeURIComponent(file); }
+// charavault.net has no page per card (cards open in a popup on its homepage), so a card's link is its PNG:
+// /cards/<folder>/<file> serves the card file, parseUrl() reads it back, and 18+ cards need a logged-in browser
+export function cvCardUrl(folder, file) { return 'https://charavault.net/cards/' + encodeURIComponent(folder) + '/' + encodeURIComponent(file); }
 export function cvFullPath(folder, file) { return `${folder}/${file}`; }
 export function splitCvPath(fullPath) {
     const path = String(fullPath || '');

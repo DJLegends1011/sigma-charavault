@@ -8,7 +8,7 @@ import charavaultBrowseView, { openCvPreview } from './charavault-browse.js';
 import { charavaultLorebooks } from './charavault-lorebooks.js';
 import {
     cvThumbUrl,
-    cvPreviewPageUrl,
+    cvCardUrl,
     cvFullPath,
     splitCvPath,
     isValidCvPath,
@@ -80,7 +80,7 @@ class CharaVaultProvider extends ProviderBase {
         if (!isValidCvPath(fp)) return null;
         const { folder, file } = splitCvPath(fp);
         if (!file) return null;
-        return cvPreviewPageUrl(folder, file);
+        return cvCardUrl(folder, file);
     }
 
     // ── In-App Preview ───────────────────────────────────────

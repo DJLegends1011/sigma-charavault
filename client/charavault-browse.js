@@ -16,7 +16,7 @@ import {
 import {
     CV_SORTS,
     cvThumbUrl,
-    cvPreviewPageUrl,
+    cvCardUrl,
     cvFullPath,
     splitCvPath,
     fetchCvCards,
@@ -502,8 +502,11 @@ async function openCvPreview(char) {
         creatorEl.dataset.creator = creator;
         creatorEl.title = creator ? `Click to see all characters by ${creator}` : '';
     }
+    const cardUrl = cvCardUrl(folder, file);
     const openBtn = document.getElementById('cvOpenInBrowserBtn');
-    if (openBtn) openBtn.href = cvPreviewPageUrl(folder, file);
+    if (openBtn) openBtn.href = cardUrl;
+    const copyBtn = document.getElementById('cvCopyLinkBtn');
+    if (copyBtn) copyBtn.dataset.url = cardUrl;
 
     // Stats row: list-row values first; the parallel fetch refreshes them
     const ratingEl = document.getElementById('cvCharRating');
@@ -1046,6 +1049,12 @@ function initCvView() {
         }
 
         on('cvCharClose', 'click', () => closeCvPreviewModal());
+        on('cvCopyLinkBtn', 'click', async () => {
+            const url = document.getElementById('cvCopyLinkBtn')?.dataset?.url;
+            if (!url) return;
+            const copied = await CoreAPI.copyTextToClipboard(url);
+            showToast(copied ? 'CharaVault link copied' : 'Could not copy the link', copied ? 'success' : 'error');
+        });
         modal?.addEventListener('click', (e) => {
             if (e.target === modal) closeCvPreviewModal();
         });
@@ -1346,8 +1355,11 @@ class CharaVaultBrowseView extends BrowseView {
                     </div>
                 </div>
                 <div class="modal-controls">
-                    <a id="cvOpenInBrowserBtn" href="#" target="_blank" rel="noopener" class="cl-btn cl-btn-secondary" title="Open on CharaVault">
-                        <i class="fa-solid fa-external-link"></i> Open
+                    <button id="cvCopyLinkBtn" type="button" aria-label="Copy link" class="cl-btn cl-btn-secondary" title="Copy this card's CharaVault link (paste it to share, or to link a character)">
+                        <i class="fa-solid fa-link"></i><span class="cv-btn-label"> Copy link</span>
+                    </button>
+                    <a id="cvOpenInBrowserBtn" aria-label="Open card image" href="#" target="_blank" rel="noopener" class="cl-btn cl-btn-secondary" title="Open the card image on CharaVault. The site has no page per card; 18+ cards need you logged in there">
+                        <i class="fa-solid fa-image"></i><span class="cv-btn-label"> Image</span>
                     </a>
                     <button id="cvDownloadBtn" class="cl-btn cl-btn-primary" title="Import into your library">
                         <i class="fa-solid fa-download"></i> Import

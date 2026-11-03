@@ -382,8 +382,8 @@ export function register(router, ctx) {
     const linked = async (req, res) => {
         await relayJson(res, await upstream(req, '/cards/' + cardPath(req) + '/lorebooks'));
     };
-    const download = async (req, res) => {
-        const response = await upstream(req, '/cards/download/' + cardPath(req), 'image/png,image/*,*/*;q=0.8');
+    // a card PNG (the current file or one revision of it): raster or octet-stream only, capped
+    const relayCardImage = async (res, response) => {
         if (!response.ok) {
             res.set('Cache-Control', 'no-store');
             await relayJson(res, response);
@@ -399,7 +399,15 @@ export function register(router, ctx) {
         res.set('Content-Type', ct.startsWith('image/') ? ct : 'image/png');
         res.send(buf);
     };
-    const thumb = async (req, res) => {
+    const download = async (req, res) => {
+        await relayCardImage(res, await upstream(req, '/cards/download/' + cardPath(req), 'image/png,image/*,*/*;q=0.8'));
+    };
+    // ?path=folder/file, the form charavault.net's own revision and favorite endpoints take
+    const pathParam = (req) => {
+        const { folder, file } = splitFullPath(undefined, undefined, req.query.path);
+        return encodeURIComponent(`${folder}/${file}`);
+    };
+    const thumb =async (req, res) => {
         const response = await upstreamCdn(req, '/cards/thumb/' + cardPath(req));
         if (!response.ok) {
             res.set('Cache-Control', 'no-store');
@@ -432,6 +440,15 @@ export function register(router, ctx) {
         if (!p || p.includes('\0') || p.split('/').includes('..')) throw httpError(400, 'Invalid card path');
         const qs = queryString(req.query, ['path', 'folder', 'file', 'threshold']);
         await relayJson(res, await upstream(req, '/cards/similar?' + qs));
+    });
+    // version history: the card's revisions, and one revision's card PNG
+    route('/cards/revisions', async (req, res) => {
+        await relayJson(res, await upstream(req, '/cards/revisions?path=' + pathParam(req)));
+    });
+    route('/cards/revision-file', async (req, res) => {
+        const id = String(req.query.id || '').trim();
+        if (!/^\d{1,12}$/.test(id)) throw httpError(400, 'Invalid revision id');
+        await relayCardImage(res, await upstream(req, `/cards/revision-file?path=${pathParam(req)}&id=${id}`, 'image/png,image/*,*/*;q=0.8'));
     });
     route('/cards/detail', detail);
     route('/cards/lorebooks', linked);

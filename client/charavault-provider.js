@@ -19,6 +19,10 @@ import {
     fetchCvThumbBuffer,
     resolveCvCharacterBook,
     buildCvCharacterCard,
+    fetchCvRevisions,
+    fetchCvRevisionPngBuffer,
+    readCvCardFromPng,
+    normalizeCvFullMetadata,
 } from './charavault-api.js';
 
 let api = null;
@@ -221,6 +225,35 @@ class CharaVaultProvider extends ProviderBase {
             api?.debugLog?.('[CharaVaultProvider] fetchLinkStats:', e?.message || e);
             return null;
         }
+    }
+
+    // ── Version History ─────────────────────────────────────
+    // charavault.net keeps every approved upload of a card as a revision (r1, r2, ...); pending
+    // and declined ones never were the card, so they stay out of its history
+
+    async fetchVersionList(linkInfo) {
+        const fullPath = String(linkInfo?.fullPath || linkInfo?.id || '');
+        if (!isValidCvPath(fullPath)) return [];
+        const revisions = await fetchCvRevisions(fullPath);
+        return revisions
+            .filter(r => (r.status === 'live' || r.status === 'superseded') && /^\d+$/.test(String(r.id)))
+            .sort((a, b) => (Number(b.rev) || 0) - (Number(a.rev) || 0))
+            .map(r => ({
+                // the list shows the ref's first 8 characters, so it leads with the revision number
+                ref: `r${Number(r.rev) || 0}-${r.id}`,
+                date: r.decided_at || r.created_at || '',
+                message: (r.message || (Number(r.rev) === 1 ? 'First upload' : 'Update')) + (r.status === 'live' ? ' (current)' : ''),
+                author: '',
+            }));
+    }
+
+    async fetchVersionData(linkInfo, ref) {
+        const fullPath = String(linkInfo?.fullPath || linkInfo?.id || '');
+        const id = /^r\d+-(\d+)$/.exec(String(ref || ''))?.[1];
+        if (!isValidCvPath(fullPath) || !id) return null;
+        const card = normalizeCvFullMetadata(readCvCardFromPng(await fetchCvRevisionPngBuffer(fullPath, id)));
+        // the version view diffs flat card fields
+        return card?.data ? { ...card.data } : null;
     }
 
     getCachedLinkNode() { return _cachedLinkNode; }

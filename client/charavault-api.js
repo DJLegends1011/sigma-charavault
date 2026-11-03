@@ -154,6 +154,22 @@ export async function fetchCvRating(fullPath, { strict = false, signal = null } 
         return null;
     }
 }
+/** The card's revisions, newest state included: [{ id, rev, status, message, created_at, decided_at }]. Throws on failure. */
+export async function fetchCvRevisions(fullPath, { signal = null } = {}) {
+    const data = await requestJson('/cards/revisions?path=' + encodeURIComponent(fullPath), signal);
+    return Array.isArray(data?.revisions) ? data.revisions : [];
+}
+/** One revision's card PNG, or null when CharaVault refused it. */
+export async function fetchCvRevisionPngBuffer(fullPath, id, { signal = null } = {}) {
+    const resp = await request('/cards/revision-file?path=' + encodeURIComponent(fullPath) + '&id=' + encodeURIComponent(id), signal, 'image/png,image/*,*/*;q=0.8');
+    if (!resp.ok) return null;
+    return await resp.arrayBuffer();
+}
+/** The card embedded in a PNG, through the app's own reader. */
+export function readCvCardFromPng(buffer) {
+    const api = dependencies.CoreAPI || CoreAPI;
+    return buffer ? api.extractCharacterDataFromPng?.(buffer) || null : null;
+}
 export async function fetchCvLinkedLorebooks(fullPath, { strict = false, signal = null } = {}) {
     try {
         return await requestJson('/cards/lorebooks?' + paramsQuery(splitCvPath(fullPath)), signal);

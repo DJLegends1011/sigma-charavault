@@ -23,7 +23,7 @@ process.env.CL_ALLOW_PRIVATE_FETCH = 'true';
 
 const { startSigma, basePng } = await import(pathToFileURL(kitPath).href);
 const pngCardPath = path.resolve(path.dirname(kitPath), '../../server/lib/png-card.js');
-const { writeCardChunks } = await import(pathToFileURL(pngCardPath).href);
+const { writeCardChunks, readCardChunks } = await import(pathToFileURL(pngCardPath).href);
 const { resolveCvBases, assertSafeUpstreamUrl, forgetCvSessions } = await import(pathToFileURL(path.join(here, '../server/index.js')).href);
 
 // ---- Mock CharaVault upstream server (verifies headers, query params, auth, redirects, and CORP)
@@ -257,6 +257,29 @@ const mockUpstream = http.createServer(async (req, res) => {
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ total: list.length, limit: 48, offset: 0, results: list }));
+        return;
+    }
+
+    if (u.pathname === '/api/cards/revisions') {
+        const revisions = u.searchParams.get('path') === 'cards/Adley_5412114.png' ? [
+            { id: 11, rev: 1, status: 'superseded', message: '', created_at: '2026-01-02T00:00:00', decided_at: '2026-01-03T00:00:00' },
+            { id: 12, rev: 2, status: 'live', message: 'Fixed the greeting', created_at: '2026-02-01T00:00:00', decided_at: '2026-02-02T00:00:00' },
+            { id: 13, rev: 3, status: 'pending', message: 'Not reviewed yet', created_at: '2026-03-01T00:00:00', decided_at: null },
+        ] : [];
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ revisions }));
+        return;
+    }
+
+    if (u.pathname === '/api/cards/revision-file') {
+        if (u.searchParams.get('path') !== 'cards/Adley_5412114.png' || u.searchParams.get('id') !== '11') {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ detail: 'Revision not found' }));
+            return;
+        }
+        // r1 is a flat V1 card, as old uploads often are
+        res.writeHead(200, { 'Content-Type': 'image/png' });
+        res.end(writeCardChunks(basePng, { name: 'Adley', description: 'The first Adley.', first_mes: 'Halt.' }));
         return;
     }
 
@@ -622,6 +645,14 @@ test('server proxy routes forward queries, attach User-Agent & auth headers, str
     assert.equal(cardsRes.body.results[0].name, 'Adley');
     assert.ok(upstreamRequests.at(-1).headers['user-agent'].includes('Mozilla/5.0'));
 
+    // 2b. Version history routes: the path rides encoded as one value, ids are digits, traversal is refused
+    const revs = await cvExt('/cards/revisions?path=' + encodeURIComponent('cards/Adley_5412114.png'));
+    assert.equal(revs.status, 200);
+    assert.equal(revs.body.revisions.length, 3);
+    assert.equal(upstreamRequests.at(-1).searchParams.path, 'cards/Adley_5412114.png');
+    assert.equal((await cvExt('/cards/revisions?path=' + encodeURIComponent('../auth/me'))).status, 400);
+    assert.equal((await cvExt('/cards/revision-file?path=' + encodeURIComponent('cards/Adley_5412114.png') + '&id=1;drop')).status, 400);
+
     // 3. Detail route preserves recommendations
     const detailRes = await cvExt('/cards/detail?folder=cards&file=Adley_5412114.png');
     assert.equal(detailRes.status, 200);
@@ -726,6 +757,10 @@ test('client extension boots, renders settings & preview modal (with failed rati
     page.CoreAPI.findCharacterMediaUrls = () => [];
     page.CoreAPI.ensureExtractorsLoaded = async () => {};
     page.CoreAPI.findCharacterGalleryUrls = () => [];
+    page.CoreAPI.extractCharacterDataFromPng = (buf) => {
+        const found = readCardChunks(Buffer.from(buf));
+        return found ? (found.v3 || found.v2) : null;
+    };
     await page.boot();
 
     // 1. Verify global handle, host registration log, and provider manifest registration
@@ -872,4 +907,17 @@ test('client extension boots, renders settings & preview modal (with failed rati
     assert.equal(await provider.enrichLocalImport(v1('', 'x'), 'd81_Twin Sensei.card.png'), null);
     const already = { data: { name: 'Adley', extensions: { charavault: { id: 'cards/Adley_5412114.png', fullPath: 'cards/Adley_5412114.png' } } } };
     assert.equal((await provider.enrichLocalImport(already, 'x.png'))?.providerInfo.fullPath, 'cards/Adley_5412114.png', 'an already-linked card keeps its link');
+
+    // 10. Version history: approved revisions only, newest first, and an old revision's card as flat fields
+    assert.equal(provider.supportsVersionHistory, true);
+    const versions = await provider.fetchVersionList({ fullPath: 'cards/Adley_5412114.png' });
+    assert.deepEqual(versions.map(v => v.ref), ['r2-12', 'r1-11'], 'pending revisions are not part of the history');
+    assert.equal(versions[0].message, 'Fixed the greeting (current)');
+    assert.equal(versions[1].message, 'First upload');
+    assert.deepEqual(await provider.fetchVersionList({ fullPath: 'cards/Venti_0075.png' }), []);
+    const r1 = await provider.fetchVersionData({ fullPath: 'cards/Adley_5412114.png' }, 'r1-11');
+    assert.equal(r1.description, 'The first Adley.', 'a flat V1 revision answers its fields');
+    assert.equal(r1.first_mes, 'Halt.');
+    assert.equal(await provider.fetchVersionData({ fullPath: 'cards/Adley_5412114.png' }, 'r9-99'), null, 'a refused revision answers null');
+    assert.equal(await provider.fetchVersionData({ fullPath: 'cards/Adley_5412114.png' }, '../x'), null);
 });

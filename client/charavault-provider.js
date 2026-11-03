@@ -76,7 +76,7 @@ class CharaVaultProvider extends ProviderBase {
 
     // ── Account ─────────────────────────────────────────────
 
-    /** A login is saved (whether it still works is the account bar's live check). */
+    /** A login is saved (whether it still works is the Settings checkmark's live check). */
     get isAuthenticated() { return hasCvCredentials(); }
 
     /** The login lives in Settings > Online > CharaVault: open it there, expanded. */

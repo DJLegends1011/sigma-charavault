@@ -5,23 +5,25 @@
    Grid layout and card base styles live in the app's browse-shared.css.
    ============================================ */
 
-/* NSFW 3-state toggle: SFW only (default), NSFW only, NSFW + SFW */
-#cvNsfwToggle.nsfw-active {
-    background: rgba(231, 76, 60, 0.25);
-    border-color: rgba(231, 76, 60, 0.5);
-    color: #e74c3c;
+/* Tags dropdown: Sigma's tri-state rows (browse-shared.css); the tag's card count sits right, as Botbooru's meta */
+#cvTagsList .cv-tag-count {
+    margin-left: auto;
+    font-size: var(--font-3xs);
+    color: var(--text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+#cvTagsList .browse-tag-filter-item .tag-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-#cvNsfwToggle.nsfw-any {
-    background: rgba(155, 89, 182, 0.22);
-    border-color: rgba(155, 89, 182, 0.5);
-    color: #c39bd3;
-}
-
-/* Tags dropdown filter layout */
-#cvTagsDropdown .browse-tags-list {
-    max-height: 220px;
-    overflow-y: auto;
+/* A lorebook without a cover PNG gets the icon tile, never an <img>, so the shared card-image shimmer
+   (stopped by .loaded when an image arrives) would loop forever: no image is coming, so no shimmer */
+.browse-card-image:has(> .lorebook-tile)::before {
+    display: none;
 }
 
 /* Feature filters (lorebook tri-state + library rows) */

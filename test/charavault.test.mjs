@@ -39,6 +39,7 @@ const loginAttempts = [];
 let sessionCounter = 0;
 let revokeSessionOnce = false;
 const favoritePaths = new Set();
+let lastCardsQuery = null; // the browse grid's last /api/cards query, read by the tag + NSFW checks
 
 const MOCK_CARDS = [
     {
@@ -239,6 +240,7 @@ const mockUpstream = http.createServer(async (req, res) => {
     }
 
     if (u.pathname === '/api/cards') {
+        lastCardsQuery = u.searchParams;
         let list = [...MOCK_CARDS];
         const q = (u.searchParams.get('q') || '').toLowerCase();
         const creator = (u.searchParams.get('creator') || '').toLowerCase();
@@ -809,6 +811,16 @@ test('client extension boots, renders settings & preview modal (with failed rati
         return found ? (found.v3 || found.v2) : null;
     };
     await page.boot();
+    // library.js's tri-state tag look (CoreAPI.tagStateLook), which the Online tag rows render through
+    const TAG_STATE_LOOK = {
+        include: { icon: 'fa-check', title: 'Included - click to exclude' },
+        exclude: { icon: 'fa-minus', title: 'Excluded - click to clear' },
+        neutral: { icon: '', title: 'Neutral - click to include' },
+    };
+    globalThis.window.tagStateLook = (state) => {
+        const st = state === 'include' || state === 'exclude' ? state : 'neutral';
+        return { state: st, ...TAG_STATE_LOOK[st] };
+    };
     // the app's on(id, event, handler) (library.js), which CoreAPI.onElement calls: without it
     // every button the browse view wires by id would be inert here
     globalThis.window.onElement = (id, event, handler) => {
@@ -1026,4 +1038,36 @@ test('client extension boots, renders settings & preview modal (with failed rati
     $('cvSearchBtn').click();
     assert.equal($('cvFilterFavorites').checked, false);
     await waitFor(() => gridPaths().includes('cards/Adley_5412114.png'), 'the search results');
+
+    // 12. Tags dropdown: Sigma's tri-state rows (as Botbooru's), neutral -> include -> exclude -> neutral
+    $('cvSearchInput').value = '';
+    $('cvSearchBtn').click();
+    $('cvTagsBtn').click();
+    await waitFor(() => $('cvTagsList').querySelector('.browse-tag-filter-item'), 'the tag rows');
+    assert.equal($('cvTagsList').querySelector('.browse-tag-pill'), null, 'no PR pills');
+    const tagName = $('cvTagsList').querySelector('.browse-tag-filter-item').dataset.tag;
+    const stateBtn = () => $('cvTagsList').querySelector(`.browse-tag-filter-item[data-tag="${tagName}"] .browse-tag-state-btn`);
+    stateBtn().click();
+    assert.ok(stateBtn().classList.contains('state-include'));
+    await waitFor(() => lastCardsQuery?.get('tags') === tagName, 'the include tag in the query');
+    assert.equal($('cvTagsBtnLabel').textContent, 'Tags (1)');
+    stateBtn().click();
+    assert.ok(stateBtn().classList.contains('state-exclude'));
+    await waitFor(() => lastCardsQuery?.get('exclude_tags')?.split(',').includes(tagName) && !lastCardsQuery.get('tags'), 'the exclude tag in the query');
+    stateBtn().click();
+    assert.ok(stateBtn().classList.contains('state-neutral'));
+    await waitFor(() => !lastCardsQuery?.get('tags') && !(lastCardsQuery?.get('exclude_tags') || '').includes(tagName), 'the tag to clear');
+    assert.equal($('cvTagsBtnLabel').textContent, 'Tags');
+
+    // 13. NSFW: two states with .active, as every Sigma provider (the mobile sheet's chip mirrors both)
+    const nsfwBtn = $('cvNsfwToggle');
+    assert.equal(nsfwBtn.querySelector('span').textContent, 'SFW Only');
+    assert.equal(nsfwBtn.classList.contains('active'), false);
+    nsfwBtn.click();
+    assert.equal(nsfwBtn.querySelector('span').textContent, 'NSFW On');
+    assert.ok(nsfwBtn.classList.contains('active'));
+    await waitFor(() => lastCardsQuery && !lastCardsQuery.has('nsfw'), 'NSFW On to omit the nsfw param (SFW + NSFW)');
+    nsfwBtn.click();
+    assert.equal(nsfwBtn.querySelector('span').textContent, 'SFW Only');
+    await waitFor(() => lastCardsQuery?.get('nsfw') === 'false', 'SFW Only to send nsfw=false');
 });

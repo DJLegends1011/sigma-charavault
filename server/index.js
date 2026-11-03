@@ -408,7 +408,7 @@ export function register(router, ctx) {
         const { folder, file } = splitFullPath(undefined, undefined, req.query.path);
         return encodeURIComponent(`${folder}/${file}`);
     };
-    const thumb =async (req, res) => {
+    const thumb = async (req, res) => {
         const response = await upstreamCdn(req, '/cards/thumb/' + cardPath(req));
         if (!response.ok) {
             res.set('Cache-Control', 'no-store');

@@ -2,16 +2,16 @@ import CoreAPI from '/modules/core-api.js';
 import { readJsonClassified, httpFailureError } from '/modules/providers/provider-utils.js';
 
 export const CV_SORTS = Object.freeze([
-    { value: 'most_downloaded', label: 'Most Downloaded' },
-    { value: 'top_rated', label: 'Top Rated' },
-    { value: 'newest', label: 'Newest' },
-    { value: 'oldest', label: 'Oldest' },
-    { value: 'name_asc', label: 'Name A-Z' },
-    { value: 'name_desc', label: 'Name Z-A' },
-    { value: 'creator_asc', label: 'Creator A-Z' },
-    { value: 'token_count_desc', label: 'Most Tokens' },
-    { value: 'token_count_asc', label: 'Fewest Tokens' },
-    { value: 'most_commented', label: 'Most Commented' },
+    { value: 'most_downloaded', label: 'Most Downloaded', icon: 'fa-solid fa-download' },
+    { value: 'top_rated', label: 'Top Rated', icon: 'fa-solid fa-star' },
+    { value: 'newest', label: 'Newest', icon: 'fa-solid fa-calendar-plus' },
+    { value: 'oldest', label: 'Oldest', icon: 'fa-solid fa-calendar' },
+    { value: 'name_asc', label: 'Name A-Z', icon: 'fa-solid fa-arrow-down-a-z' },
+    { value: 'name_desc', label: 'Name Z-A', icon: 'fa-solid fa-arrow-up-z-a' },
+    { value: 'creator_asc', label: 'Creator A-Z', icon: 'fa-solid fa-user-pen' },
+    { value: 'token_count_desc', label: 'Most Tokens', icon: 'fa-solid fa-coins' },
+    { value: 'token_count_asc', label: 'Fewest Tokens', icon: 'fa-solid fa-coins' },
+    { value: 'most_commented', label: 'Most Commented', icon: 'fa-solid fa-comments' },
 ].map(Object.freeze));
 
 const FOLDER_RE = /^[A-Za-z0-9_-]{1,64}$/;

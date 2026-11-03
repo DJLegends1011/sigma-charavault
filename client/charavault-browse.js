@@ -5,7 +5,7 @@
 import {
     BrowseView, featureFilterState, renderFeatureFilterItems, countActiveFeatures,
     activeFeatureRows, featurePasses, applyTagsClamp, cardTagsHtml,
-    libraryFeatureRows, libraryBadgeHtml, libraryCardClass, renderAltGreetingsList,
+    tagStateButtonHtml, updateTagStateButton, libraryFeatureRows, libraryBadgeHtml, libraryCardClass, renderAltGreetingsList,
 } from '/modules/providers/browse-view.js';
 import CoreAPI from '/modules/core-api.js';
 import { importBookToShelf } from '/modules/lorebook-shelf.js';
@@ -58,10 +58,10 @@ let cvLoadToken = 0;
 let cvCurrentSearch = '';
 let cvCurrentCreator = '';    // creator filter (drives the banner)
 let cvSortMode = 'most_downloaded';
-let cvNsfwMode = 'sfw';       // 'sfw' | 'nsfw' | 'any' (persisted)
+let cvNsfwMode = 'sfw';       // 'sfw' | 'any' (persisted; the PR's old 'nsfw' only reads as 'any')
 let cvLorebookMode = 'any';   // 'any' | 'with' | 'without'
 let cvSelectedChar = null;
-let cvTagFilters = new Set(); // tag names to include
+let cvTagFilters = new Map(); // Map<tagName, 'include' | 'exclude'>
 let cvGridRenderedCount = 0;
 let cvDetailToken = 0;        // generation counter for the preview's async fills
 
@@ -214,21 +214,27 @@ function passesClientFilters(hits, activeRows) {
         && (!activeRows.length || featurePasses(h, activeRows)));
 }
 
+/** The Tags dropdown's tags in one state ('include' or 'exclude'). */
+function cvTagsIn(state) {
+    return [...cvTagFilters].filter(([, s]) => s === state).map(([tag]) => tag);
+}
+
 function cvFetchOpts(pageIndex = cvCurrentPage) {
     // paramsQuery skips null/undefined but not empty strings, so empty filters are omitted here
     const opts = {
         q: cvCurrentSearch || null,
         creator: cvCurrentCreator || null,
-        tags: cvTagFilters.size > 0 ? [...cvTagFilters].join(',') : null,
-        // 'sfw' -> false, 'nsfw' -> true, 'any' -> null (param omitted)
-        nsfw: cvNsfwMode === 'sfw' ? false : cvNsfwMode === 'nsfw' ? true : null,
+        tags: cvTagsIn('include').join(',') || null,
+        // 'sfw' -> false, 'any' -> null (param omitted: SFW and NSFW together)
+        nsfw: cvNsfwMode === 'sfw' ? false : null,
         // 'with' -> true, 'without' -> false, 'any' -> null (param omitted)
         has_book: cvLorebookMode === 'with' ? true : cvLorebookMode === 'without' ? false : null,
         sort: cvSortMode,
         limit: PAGE_SIZE,
         offset: pageIndex * PAGE_SIZE,
     };
-    const excludeTags = view.persistentExcludeTags().join(',');
+    // a tag set to exclude in the Tags dropdown rides beside the persistent ones (Settings)
+    const excludeTags = [...new Set([...view.persistentExcludeTags(), ...cvTagsIn('exclude')])].join(',');
     if (excludeTags) opts.exclude_tags = excludeTags;
     return opts;
 }
@@ -449,31 +455,24 @@ function performCvSearch() {
 }
 
 // ========================================
-// NSFW TOGGLE (3-state)
+// NSFW TOGGLE (SFW Only / NSFW On, as every Sigma provider)
 // ========================================
 
 function updateCvNsfwToggle() {
     const btn = document.getElementById('cvNsfwToggle');
     if (!btn) return;
-    btn.classList.remove('nsfw-active', 'nsfw-any');
-    const span = btn.querySelector('span');
-    if (cvNsfwMode === 'nsfw') {
-        btn.classList.add('nsfw-active');
-        btn.title = 'Showing NSFW only - click to include SFW';
-        if (span) span.textContent = 'NSFW Only';
-    } else if (cvNsfwMode === 'any') {
-        btn.classList.add('nsfw-any');
-        btn.title = 'Showing NSFW and SFW - click for SFW only';
-        if (span) span.textContent = 'NSFW + SFW';
-    } else {
-        btn.title = 'Showing SFW only - click for NSFW only';
-        if (span) span.textContent = 'SFW Only';
-    }
+    const on = cvNsfwMode !== 'sfw';
+    btn.classList.toggle('active', on);
+    btn.innerHTML = on
+        ? '<i class="fa-solid fa-fire"></i> <span>NSFW On</span>'
+        : '<i class="fa-solid fa-shield-halved"></i> <span>SFW Only</span>';
+    btn.title = on
+        ? 'Showing SFW and NSFW (needs a logged-in, age-verified account) - click to show SFW only'
+        : 'Showing SFW only - click to include NSFW (needs a logged-in, age-verified account)';
 }
 
 function cycleCvNsfwMode() {
-    // sfw -> nsfw -> any -> sfw
-    cvNsfwMode = cvNsfwMode === 'sfw' ? 'nsfw' : cvNsfwMode === 'nsfw' ? 'any' : 'sfw';
+    cvNsfwMode = cvNsfwMode === 'sfw' ? 'any' : 'sfw';
     cvSettings?.set('nsfw', cvNsfwMode);
 }
 
@@ -509,25 +508,38 @@ function renderCvTagsList() {
     const list = document.getElementById('cvTagsList');
     if (!list) return;
 
-    const top = cvPopularTags.slice(0, 80);
+    // the tags in a state lead, even when the live search did not return them
+    const rows = cvPopularTags.slice(0, 80);
+    const listed = new Set(rows.map(([tag]) => tag));
+    const chosen = [...cvTagFilters.keys()].filter(tag => !listed.has(tag)).map(tag => [tag, null]);
+    const top = [...chosen, ...rows].sort((a, b) => (cvTagFilters.has(b[0]) ? 1 : 0) - (cvTagFilters.has(a[0]) ? 1 : 0));
     if (top.length === 0) {
         list.innerHTML = '<div class="browse-tags-empty">No matching tags</div>';
         return;
     }
 
-    list.innerHTML = top.map(([tag, count]) =>
-        `<button type="button" class="browse-tag-pill${cvTagFilters.has(tag) ? ' active' : ''}" data-tag="${escapeHtml(tag)}" title="${escapeHtml(tag)} (${formatNumber(count)})">${escapeHtml(tag)}</button>`
-    ).join('');
+    list.innerHTML = top.map(([tag, count]) => `
+        <div class="browse-tag-filter-item" data-tag="${escapeHtml(tag)}">
+            ${tagStateButtonHtml(cvTagFilters.get(tag) || 'neutral')}
+            <span class="tag-label" title="${escapeHtml(tag)}">${escapeHtml(tag)}</span>
+            ${count != null ? `<span class="cv-tag-count">${formatNumber(count)}</span>` : ''}
+        </div>
+    `).join('');
 }
 
-function toggleCvTag(tag) {
+/** neutral -> include -> exclude -> neutral, as every Sigma tag list cycles. */
+function cycleCvTag(item) {
+    const tag = item?.dataset?.tag;
     if (!tag) return;
-    if (cvTagFilters.has(tag)) cvTagFilters.delete(tag);
-    else cvTagFilters.add(tag);
+    const current = cvTagFilters.get(tag) || 'neutral';
+    if (current === 'neutral') cvTagFilters.set(tag, 'include');
+    else if (current === 'include') cvTagFilters.set(tag, 'exclude');
+    else cvTagFilters.delete(tag);
+    updateTagStateButton(item.querySelector('.browse-tag-state-btn'), cvTagFilters.get(tag) || 'neutral');
     updateCvTagsBtn();
-    renderCvTagsList();
-    charavaultBrowseView.reload();
+    cvTagReloadDebounced();
 }
+const cvTagReloadDebounced = debounce(() => charavaultBrowseView.reload(), 400);
 
 function updateCvTagsBtn() {
     const btn = document.getElementById('cvTagsBtn');
@@ -978,7 +990,7 @@ let delegatesInitialized = false;
 let cvModalEventsAttached = false;
 
 function initCvView() {
-    cvNsfwMode = cvSettings?.get('nsfw') || 'sfw';
+    cvNsfwMode = (cvSettings?.get('nsfw') || 'sfw') === 'sfw' ? 'sfw' : 'any';
     if (delegatesInitialized) return;
     delegatesInitialized = true;
 
@@ -1090,8 +1102,7 @@ function initCvView() {
 
     const tagsList = document.getElementById('cvTagsList');
     tagsList?.addEventListener('click', (e) => {
-        const pill = e.target.closest('.browse-tag-pill');
-        if (pill) toggleCvTag(pill.dataset.tag);
+        if (e.target.closest('.browse-tag-state-btn, .tag-label')) cycleCvTag(e.target.closest('.browse-tag-filter-item'));
     });
 
     // Features dropdown: the lorebook tri-state radios plus the shared Library rows
@@ -1377,7 +1388,7 @@ class CharaVaultBrowseView extends BrowseView {
             </div>
 
             <!-- NSFW 3-state toggle -->
-            <button id="cvNsfwToggle" class="glass-btn nsfw-toggle" title="Cycle NSFW filter (SFW only / NSFW only / Any)">
+            <button id="cvNsfwToggle" class="glass-btn nsfw-toggle" title="Showing SFW only - click to include NSFW">
                 <i class="fa-solid fa-shield-halved"></i> <span>SFW Only</span>
             </button>
 
@@ -1652,7 +1663,7 @@ class CharaVaultBrowseView extends BrowseView {
         cvSelectedChar = null;
         cvSortMode = 'most_downloaded';
         cvLorebookMode = 'any';
-        cvTagFilters = new Set();
+        cvTagFilters = new Map();
         for (const k of Object.keys(cvFeatureState)) cvFeatureState[k] = false;
         // a rebuilt DOM needs its listeners back even when deactivate() never ran
         delegatesInitialized = false;

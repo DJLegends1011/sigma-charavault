@@ -213,18 +213,9 @@ export default {
         ctx.ui.addProviderSettingsSection('charavault', (el) => {
             buildCvSettingsSection(ctx, el);
         }, { excludeTagsHint: 'Tags entered here are always excluded from CharaVault browse results.' });
-
-        // 6. a debugging/integration handle for anyone poking at CharaVault from the console
-        globalThis.window.__SIGMA_CHARAVAULT__ = {
-            version: '1.0.0',
-            provider: charavaultProvider,
-            browseView: charavaultBrowseView,
-            renderSettings: (el) => buildCvSettingsSection(ctx, el),
-        };
     },
 
     dispose() {
-        delete globalThis.window?.__SIGMA_CHARAVAULT__;
         delete globalThis.window?.cvImportCharacter;
         if (globalThis.window?.PROVIDER_MANIFEST?.charavault) {
             delete globalThis.window.PROVIDER_MANIFEST.charavault;

@@ -830,20 +830,30 @@ test('client extension boots, renders settings & preview modal (with failed rati
         return true;
     };
 
-    // 1. Verify global handle, host registration log, and provider manifest registration
+    // 1. Verify host registration log and provider manifest registration
     assert.deepEqual(page.log.providersIn, ['charavault']);
     assert.deepEqual(page.log.injected, ['charavault']);
-    const handle = globalThis.window.__SIGMA_CHARAVAULT__;
-    assert.ok(handle, '__SIGMA_CHARAVAULT__ handle should be mounted');
-    assert.equal(handle.version, '1.0.0');
-    const provider = handle.provider;
+    // the booted extension's own modules (the page loads the copy installed under the data folder)
+    const clientDir = path.join(sigma.dataDir, 'extensions', 'charavault', 'client');
+    const provider = (await import(pathToFileURL(path.join(clientDir, 'charavault-provider.js')).href)).default;
+    const browseView = (await import(pathToFileURL(path.join(clientDir, 'charavault-browse.js')).href)).default;
     assert.equal(provider.id, 'charavault');
     assert.ok(globalThis.window.PROVIDER_MANIFEST.charavault);
 
     // 2. Verify Settings > Online > CharaVault section renders & persists
+    // the kit renders the section into a bare stand-in node, so init once more with a ctx that keeps the render
+    let renderSettings = null;
+    const entry = (await import(pathToFileURL(path.join(clientDir, 'index.js')).href)).default;
+    await entry.init({
+        CoreAPI: page.CoreAPI,
+        settings: { get: (k) => page.settings[`ext:charavault:${k}`], set: (k, v) => { page.settings[`ext:charavault:${k}`] = v; } },
+        providers: { register: async () => {} },
+        ui: { addOverlay() {}, addProviderSettingsSection: (id, render) => { renderSettings = render; } },
+    });
+    assert.equal(typeof renderSettings, 'function', 'Settings > Online section is contributed');
     const settingsSlot = page.document.createElement('div');
     page.document.body.appendChild(settingsSlot);
-    handle.renderSettings(settingsSlot);
+    renderSettings(settingsSlot);
     const pwInput = page.document.getElementById('settingsCharavaultAppPassword');
     const gwDetails = page.document.getElementById('cvGatewayAdvanced');
     const eyeBtn = page.document.getElementById('toggleCharavaultAppPasswordVisibility');
@@ -886,9 +896,9 @@ test('client extension boots, renders settings & preview modal (with failed rati
 
     // 5. Verify BrowseView DOM & openCvPreview resilience when rating or lorebooks fail (H4 regression check)
     const viewWrapper = page.document.createElement('div');
-    viewWrapper.innerHTML = handle.browseView.renderFilterBar() + handle.browseView.renderView() + handle.browseView.renderModals();
+    viewWrapper.innerHTML = browseView.renderFilterBar() + browseView.renderView() + browseView.renderModals();
     page.document.body.appendChild(viewWrapper);
-    handle.browseView.init();
+    browseView.init();
 
     failRatingMode = true;
     failLinkedLorebooksMode = true;
@@ -901,7 +911,7 @@ test('client extension boots, renders settings & preview modal (with failed rati
     failLinkedLorebooksMode = false;
     // the section reads "Description", like every other provider, not the PR's "Character Definition"
     assert.equal(page.document.querySelector('[data-section="cvCharDescription"]').dataset.label, 'Description');
-    handle.browseView.closePreview();
+    browseView.closePreview();
 
     // 5b. A flat V1 full_metadata (no { data } wrapper) still fills every field, and the
     // creator's notes are the notes, not the description preview
@@ -915,7 +925,7 @@ test('client extension boots, renders settings & preview modal (with failed rati
     assert.equal(flatCard.data.description, 'Created by Yorha, to fight in the 14 machine war.');
     assert.equal(flatCard.data.creator_notes, '2B finds you, a human, wounded.');
     assert.equal(flatCard.data.mes_example, '{{random_user_1}}: Hello, 2B!');
-    handle.browseView.closePreview();
+    browseView.closePreview();
 
     // 6. Verify full character import into Project Σ library
     const importRes = await provider.importCharacter('cards/Adley_5412114.png', MOCK_CARDS[0]);
@@ -1019,7 +1029,7 @@ test('client extension boots, renders settings & preview modal (with failed rati
     heart.click();
     await waitFor(() => heart.classList.contains('favorited'), 'the favorite to be added');
     assert.ok(favoritePaths.has('cards/Adley_5412114.png'));
-    handle.browseView.closePreview();
+    browseView.closePreview();
 
     // My Favorites: the grid is the account's list
     setBox('cvFilterFavorites', true);
@@ -1031,7 +1041,7 @@ test('client extension boots, renders settings & preview modal (with failed rati
     heart.click();
     await waitFor(() => !heart.classList.contains('favorited') && !heart.classList.contains('loading'), 'the favorite to be removed');
     assert.deepEqual(gridPaths(), []);
-    handle.browseView.closePreview();
+    browseView.closePreview();
 
     // a typed search is a catalog search: My Favorites steps aside
     $('cvSearchInput').value = 'Adley';

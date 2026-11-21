@@ -2,5 +2,6 @@
     "name": "sigma-charavault",
     "version": "1.0.1",
     "private": true,
-    "type": "module"
+    "type": "module",
+    "license": "GPL-3.0-only"
 }

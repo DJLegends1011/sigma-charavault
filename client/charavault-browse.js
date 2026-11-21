@@ -99,9 +99,15 @@ export function setCvSettings(settings) {
 // LOCAL LIBRARY LOOKUP
 // ========================================
 
+// Sigma 1.2.0 asks the server through hitMatchName; 1.1.3 still has isCharPossibleMatch
+function possibleMatch(hit) {
+    if (typeof view.isHitPossibleMatch === 'function') return view.isHitPossibleMatch(hit);
+    return view.isCharPossibleMatch(hit?.name || '', hit?.creator || '');
+}
+
 function isCharPossibleMatchObj(hit) {
     if (view.isHitInLibrary(hit)) return false;
-    return view.isCharPossibleMatch(hit?.name || '', hit?.creator || '');
+    return possibleMatch(hit);
 }
 
 /** Light a grid card as in-library after an import landed outside the lane's own heal. */

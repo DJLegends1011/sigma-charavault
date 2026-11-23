@@ -428,6 +428,8 @@ async function toggleCvCharFavorite() {
     syncCvFavButton(!want, true);
     try {
         const now = await setCvFavorite(fullPath, want);
+        // said even when the preview moved on: the change landed on the account either way
+        showToast(now ? 'Added to CharaVault favorites' : 'Removed from CharaVault favorites', now ? 'success' : 'info');
         if (cvSelectedChar !== char) return;
         syncCvFavButton(now);
         // un-favorited while My Favorites is on: it leaves that list

@@ -1,7 +1,7 @@
 {
     "id": "charavault",
     "name": "CharaVault",
-    "version": "1.0.1",
+    "version": "1.1.0",
     "author": "DJLegends",
     "description": "CharaVault (charavault.net) online character and lorebook source for Project Σ: browse, search, preview, find visually similar cards, auto-import linked lorebooks, and browse the standalone Lorebooks shelf. Ported and expanded from AdamsGH's PR #18.",
     "requires": { "api": "2.6" },
@@ -16,7 +16,6 @@
         "gatewayUrl": "",
         "gatewayCdnUrl": "",
         "gatewayKey": "",
-        "nsfw": "sfw",
-        "lorebookNsfw": false
+        "nsfw": false
     }
 }

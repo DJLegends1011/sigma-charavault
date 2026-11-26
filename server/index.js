@@ -10,8 +10,6 @@ const MAX_JSON_BYTES = 10 * 1024 * 1024;   // 10 MB
 const MAX_BINARY_BYTES = 50 * 1024 * 1024; // 50 MB
 const REQUEST_TIMEOUT_MS = 30_000;
 
-export const FOLDER_RE = /^[A-Za-z0-9_-]{1,64}$/;
-
 const BLOCKED_HOSTNAMES = new Set([
     'localhost',
     'metadata.google.internal',
@@ -137,7 +135,9 @@ export function isValidFileSegment(file) {
 export function validateCardSegments(folder, file) {
     const f = String(folder || '').trim();
     const fn = String(file || '').trim();
-    if (!FOLDER_RE.test(f) || !isValidFileSegment(fn)) {
+    // CharaVault folders carry spaces and punctuation ("sinkdrinker - 5Volt - 296043"), so a folder
+    // passes the same traversal guard as a file name (no slash, backslash, NUL or "..")
+    if (!isValidFileSegment(f) || !isValidFileSegment(fn)) {
         throw httpError(400, 'Invalid card folder or filename');
     }
     return { folder: f, file: fn };

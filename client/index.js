@@ -6,6 +6,7 @@ import { initCvApi, cvMetadataCache, checkCvLogin } from './charavault-api.js';
 import charavaultProvider from './charavault-provider.js';
 import charavaultBrowseView, {
     setCvSettings,
+    cvNsfwSetting,
     closeCvPreviewModal,
     isCvPreviewOpen,
 } from './charavault-browse.js';
@@ -28,15 +29,17 @@ function buildCvSettingsSection(ctx, el) {
         <div class="settings-group">
             <div class="settings-group-title"><i class="fa-solid fa-key"></i> Authentication</div>
             <div class="settings-row">
-                <label for="settingsCharavaultEmail">Email</label>
-                <input type="email" id="settingsCharavaultEmail" class="glass-input" placeholder="you@example.com" autocomplete="off">
+                <label for="settingsCharavaultEmail">Email:</label>
+                <div class="settings-input-group">
+                    <input type="email" id="settingsCharavaultEmail" placeholder="you@example.com" autocomplete="off">
+                </div>
             </div>
             <div class="settings-row">
-                <label for="settingsCharavaultAppPassword">App Password</label>
+                <label for="settingsCharavaultAppPassword">App Password:</label>
                 <div class="settings-input-group">
-                    <input type="password" id="settingsCharavaultAppPassword" class="glass-input" placeholder="cv_..." autocomplete="new-password" data-sensitive="true">
+                    <input type="password" id="settingsCharavaultAppPassword" placeholder="cv_..." autocomplete="new-password" data-sensitive="true">
                     <button type="button" class="glass-btn icon-only" id="toggleCharavaultAppPasswordVisibility" title="Show/Hide"><i class="fa-solid fa-eye"></i></button>
-                    <button type="button" class="glass-btn icon-only" id="validateCharavaultBtn" title="Check the email and app password"><i class="fa-solid fa-check"></i></button>
+                    <button type="button" class="settings-verify-btn" id="validateCharavaultBtn" title="Check the email and app password"><i class="fa-solid fa-check"></i></button>
                 </div>
                 <span class="settings-hint">Optional. Your CharaVault account email plus an App Password (cv_...) for 18+ NSFW cards, unblurred thumbnails and 2&times; rate limits. Create one under Account &gt; App Passwords on <a href="https://charavault.net" target="_blank" rel="noopener">charavault.net</a>; the account must be age-verified for NSFW. The password is only sent to CharaVault's login, never to the page.</span>
                 <span class="settings-hint" id="cvLoginStatus" hidden></span>
@@ -48,17 +51,21 @@ function buildCvSettingsSection(ctx, el) {
             <details class="settings-advanced" id="cvGatewayAdvanced">
                 <summary>Advanced: custom gateway / proxy override</summary>
                 <div class="settings-row">
-                    <label for="settingsCharavaultGatewayUrl">Gateway URL</label>
-                    <input type="text" id="settingsCharavaultGatewayUrl" class="glass-input" placeholder="Leave empty for direct charavault.net access (e.g. https://proxy.example.com/v1/cv)">
-                </div>
-                <div class="settings-row">
-                    <label for="settingsCharavaultGatewayCdnUrl">Gateway CDN URL</label>
-                    <input type="text" id="settingsCharavaultGatewayCdnUrl" class="glass-input" placeholder="Optional — overrides thumbnail/CDN host">
-                </div>
-                <div class="settings-row">
-                    <label for="settingsCharavaultGatewayKey">Gateway Key</label>
+                    <label for="settingsCharavaultGatewayUrl">Gateway URL:</label>
                     <div class="settings-input-group">
-                        <input type="password" id="settingsCharavaultGatewayKey" class="glass-input" placeholder="Bearer token" autocomplete="new-password" data-sensitive="true">
+                        <input type="text" id="settingsCharavaultGatewayUrl" placeholder="Leave empty for direct charavault.net access (e.g. https://proxy.example.com/v1/cv)">
+                    </div>
+                </div>
+                <div class="settings-row">
+                    <label for="settingsCharavaultGatewayCdnUrl">Gateway CDN URL:</label>
+                    <div class="settings-input-group">
+                        <input type="text" id="settingsCharavaultGatewayCdnUrl" placeholder="Optional: overrides the thumbnail/CDN host">
+                    </div>
+                </div>
+                <div class="settings-row">
+                    <label for="settingsCharavaultGatewayKey">Gateway Key:</label>
+                    <div class="settings-input-group">
+                        <input type="password" id="settingsCharavaultGatewayKey" placeholder="Bearer token" autocomplete="new-password" data-sensitive="true">
                         <button type="button" class="glass-btn icon-only" id="toggleCharavaultGatewayKeyVisibility" title="Show/Hide"><i class="fa-solid fa-eye"></i></button>
                     </div>
                 </div>
@@ -117,7 +124,7 @@ function wireLoginCheck(ctx, findEl) {
     const btn = findEl('validateCharavaultBtn');
     const status = findEl('cvLoginStatus');
     if (!btn) return;
-    const toast = (msg, type) => (ctx.ui?.toast || window.showToast)?.(msg, type);
+    const toast = (msg, type) => ctx.CoreAPI.showToast?.(msg, type);
     const icon = (name) => `<i class="fa-solid fa-${name}"></i>`;
     const say = (text, kind) => {
         if (!status) return;
@@ -175,7 +182,10 @@ export default {
             settings: ctx.settings,
         });
 
-        // 2. the browse view reads its NSFW preference through the same facade
+        // 2. the browse view reads its NSFW preference through the same facade. Before 1.1.0 it was
+        //    'sfw' / 'any'; it is a boolean now, so the Lorebooks kind can share it as Chub's does
+        const savedNsfw = ctx.settings.get('nsfw');
+        if (typeof savedNsfw === 'string') ctx.settings.set('nsfw', cvNsfwSetting(ctx.settings));
         setCvSettings(ctx.settings);
 
         // 3. the provider: registering is the whole job, every surface derives from the row
@@ -194,16 +204,6 @@ export default {
             avatarTap: { imgId: 'cvCharAvatar' },
         };
         await ctx.providers.register(charavaultProvider, manifestRow);
-        // Ensure test harnesses that stub ctx.providers.register still initialize the provider instance
-        if (!charavaultProvider._manifest) {
-            charavaultProvider._manifest = manifestRow;
-            if (globalThis.window?.PROVIDER_MANIFEST) {
-                globalThis.window.PROVIDER_MANIFEST.charavault = manifestRow;
-            }
-        }
-        if (!charavaultProvider._coreAPI) {
-            await charavaultProvider.init(ctx.CoreAPI);
-        }
 
         // 4. the preview closes like the app's own dialogs, through the overlay ledger
         ctx.ui.addOverlay({ id: 'preview', close: closeCvPreviewModal, visible: isCvPreviewOpen });
@@ -215,10 +215,5 @@ export default {
         }, { excludeTagsHint: 'Tags entered here are always excluded from CharaVault browse results.' });
     },
 
-    dispose() {
-        delete globalThis.window?.cvImportCharacter;
-        if (globalThis.window?.PROVIDER_MANIFEST?.charavault) {
-            delete globalThis.window.PROVIDER_MANIFEST.charavault;
-        }
-    },
+    dispose() {},
 };

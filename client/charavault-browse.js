@@ -6,6 +6,7 @@ import {
     BrowseView, featureFilterState, renderFeatureFilterItems, countActiveFeatures,
     activeFeatureRows, featurePasses, applyTagsClamp, cardTagsHtml,
     tagStateButtonHtml, updateTagStateButton, libraryFeatureRows, libraryBadgeHtml, libraryCardClass, renderAltGreetingsList,
+    featureBadgesHtml, setFilterCount, updateNsfwToggleButton,
 } from '/modules/providers/browse-view.js';
 import CoreAPI from '/modules/core-api.js';
 import { importBookToShelf } from '/modules/lorebook-shelf.js';
@@ -58,8 +59,7 @@ let cvLoadToken = 0;
 let cvCurrentSearch = '';
 let cvCurrentCreator = '';    // creator filter (drives the banner)
 let cvSortMode = 'most_downloaded';
-let cvNsfwMode = 'sfw';       // 'sfw' | 'any' (persisted; the PR's old 'nsfw' only reads as 'any')
-let cvLorebookMode = 'any';   // 'any' | 'with' | 'without'
+let cvNsfwEnabled = false;    // ext:charavault:nsfw, shared with the Lorebooks kind (as Chub's chubNsfw)
 let cvSelectedChar = null;
 let cvTagFilters = new Map(); // Map<tagName, 'include' | 'exclude'>
 let cvGridRenderedCount = 0;
@@ -78,14 +78,19 @@ let cvSettings = null;
 
 let view; // module-scoped BrowseView instance reference (set once in the constructor)
 
-// The Library rows of the Features dropdown; the lorebook tri-state rides beside them as radios
-// favorites is a data-source switch (the account's list), not a client predicate
+// The Features dropdown: Lorebook (server-side), My Favorites (a data-source switch, the account's
+// list, not a client predicate) and the shared Library rows
 const CV_FEATURE_FILTERS = [
+    // param rows are answered by CharaVault (has_book=true); nodeTest only lights the card badge
+    { key: 'lore', id: 'cvFilterLore', section: 'must', icon: 'fa-book', label: 'Lorebook',
+      param: 'has_book', nodeTest: (c) => !!c.has_lorebook,
+      badge: { cls: '', title: 'Has Lorebook', icon: 'fa-book' } },
     { key: 'favorites', id: 'cvFilterFavorites', section: 'personal', icon: 'fa-heart', iconStyle: 'color: #e74c3c;', label: 'My Favorites' },
     ...libraryFeatureRows('cv', () => view, isCharPossibleMatchObj),
 ];
 const cvFeatureState = featureFilterState(CV_FEATURE_FILTERS);
 const CV_FILTER_SECTIONS = [
+    { key: 'must', title: 'Character must have:' },
     { key: 'personal', title: 'Personal <span class="browse-hint-sub">(requires login)</span>:' },
     { key: 'library', title: 'Library:' },
 ];
@@ -95,19 +100,19 @@ export function setCvSettings(settings) {
     cvSettings = settings || null;
 }
 
+/** The saved NSFW choice; before 1.1.0 it was the strings 'sfw' / 'any'. */
+export function cvNsfwSetting(settings = cvSettings) {
+    const v = settings?.get('nsfw');
+    return v === true || v === 'any';
+}
+
 // ========================================
 // LOCAL LIBRARY LOOKUP
 // ========================================
 
-// Sigma 1.2.0 asks the server through hitMatchName; 1.1.3 still has isCharPossibleMatch
-function possibleMatch(hit) {
-    if (typeof view.isHitPossibleMatch === 'function') return view.isHitPossibleMatch(hit);
-    return view.isCharPossibleMatch(hit?.name || '', hit?.creator || '');
-}
-
 function isCharPossibleMatchObj(hit) {
     if (view.isHitInLibrary(hit)) return false;
-    return possibleMatch(hit);
+    return view.isHitPossibleMatch(hit);
 }
 
 /** Light a grid card as in-library after an import landed outside the lane's own heal. */
@@ -143,7 +148,7 @@ function createCvCard(char) {
     const creator = char.creator || '';
     const thumbUrl = cvThumbUrl(char.folder, char.file);
     const inLibrary = view.isHitInLibrary(char);
-    const possibleTier = inLibrary ? null : view.getPossibleMatchTier(name, creator);
+    const possibleTier = inLibrary ? null : view.possibleMatchTierFor(char);
 
     const tagline = char.description_preview ? String(char.description_preview).slice(0, 200) : '';
     const tokenNum = Number(char.token_count) || 0;
@@ -161,12 +166,10 @@ function createCvCard(char) {
     const badges = [view.importingBadge(char)];
     const libraryBadge = libraryBadgeHtml(inLibrary, possibleTier);
     if (libraryBadge) badges.push(libraryBadge);
-    if (char.has_lorebook) {
-        badges.push('<span class="browse-feature-badge" title="Has Lorebook"><i class="fa-solid fa-book"></i></span>');
-    }
+    badges.push(...featureBadgesHtml(char, CV_FEATURE_FILTERS));
 
     return `
-        <div class="${libraryCardClass(inLibrary, possibleTier)}" data-cv-path="${escapeHtml(char.fullPath || '')}" data-full-path="${escapeHtml(char.fullPath || '')}"${view.linkKeyAttr(char)} data-match-name="${escapeHtml(name)}"${tagline ? ` title="${escapeHtml(tagline)}"` : ''}>
+        <div class="${libraryCardClass(inLibrary, possibleTier)}" data-cv-path="${escapeHtml(char.fullPath || '')}" data-full-path="${escapeHtml(char.fullPath || '')}"${view.linkKeyAttr(char)}${view.matchAttr(char)}${tagline ? ` title="${escapeHtml(tagline)}"` : ''}>
             <div class="browse-card-image">
                 <img data-src="${escapeHtml(thumbUrl)}" src="${IMG_PLACEHOLDER}" alt="${escapeHtml(name)}" decoding="async" fetchpriority="low" onerror="this.dataset.failed='1';this.src='/img/no-portrait.png'">
                 ${char.nsfw ? '<span class="browse-nsfw-badge">NSFW</span>' : ''}
@@ -231,10 +234,9 @@ function cvFetchOpts(pageIndex = cvCurrentPage) {
         q: cvCurrentSearch || null,
         creator: cvCurrentCreator || null,
         tags: cvTagsIn('include').join(',') || null,
-        // 'sfw' -> false, 'any' -> null (param omitted: SFW and NSFW together)
-        nsfw: cvNsfwMode === 'sfw' ? false : null,
-        // 'with' -> true, 'without' -> false, 'any' -> null (param omitted)
-        has_book: cvLorebookMode === 'with' ? true : cvLorebookMode === 'without' ? false : null,
+        // SFW Only -> false, NSFW On -> null (param omitted: SFW and NSFW together)
+        nsfw: cvNsfwEnabled ? null : false,
+        has_book: cvFeatureState.lore ? true : null,
         sort: cvSortMode,
         limit: PAGE_SIZE,
         offset: pageIndex * PAGE_SIZE,
@@ -287,7 +289,8 @@ async function loadCvCharacters(append = false) {
         await charavaultBrowseView.probeHits(raw);
         if (thisToken !== cvLoadToken || !delegatesInitialized) return;
 
-        const activeRows = activeFeatureRows(CV_FEATURE_FILTERS, cvFeatureState);
+        // rows with a param were answered upstream, so only the rest filter on the client
+        const activeRows = activeFeatureRows(CV_FEATURE_FILTERS, cvFeatureState).filter(f => !f.param);
         const clientFiltering = activeRows.length > 0 || view.persistentExcludeTags().length > 0;
         let hits = passesClientFilters(raw, activeRows);
         let lastRawLen = raw.length;
@@ -342,7 +345,7 @@ async function loadCvCharacters(append = false) {
                 provider: 'charavault',
                 error: err,
                 message: `Search failed: ${err.message}`,
-                flags: { nsfw: cvNsfwMode },
+                flags: { nsfw: cvNsfwEnabled },
                 retry: () => charavaultBrowseView.reload({ force: true }),
             });
         }
@@ -467,21 +470,15 @@ function performCvSearch() {
 // ========================================
 
 function updateCvNsfwToggle() {
-    const btn = document.getElementById('cvNsfwToggle');
-    if (!btn) return;
-    const on = cvNsfwMode !== 'sfw';
-    btn.classList.toggle('active', on);
-    btn.innerHTML = on
-        ? '<i class="fa-solid fa-fire"></i> <span>NSFW On</span>'
-        : '<i class="fa-solid fa-shield-halved"></i> <span>SFW Only</span>';
-    btn.title = on
-        ? 'Showing SFW and NSFW (needs a logged-in, age-verified account) - click to show SFW only'
-        : 'Showing SFW only - click to include NSFW (needs a logged-in, age-verified account)';
+    updateNsfwToggleButton('cvNsfwToggle', cvNsfwEnabled, {
+        onTitle: 'Showing SFW and NSFW (needs a logged-in, age-verified account) - click to show SFW only',
+        offTitle: 'Showing SFW only - click to include NSFW (needs a logged-in, age-verified account)',
+    });
 }
 
-function cycleCvNsfwMode() {
-    cvNsfwMode = cvNsfwMode === 'sfw' ? 'any' : 'sfw';
-    cvSettings?.set('nsfw', cvNsfwMode);
+function toggleCvNsfw() {
+    cvNsfwEnabled = !cvNsfwEnabled;
+    cvSettings?.set('nsfw', cvNsfwEnabled);
 }
 
 // ========================================
@@ -530,7 +527,7 @@ function renderCvTagsList() {
         <div class="browse-tag-filter-item" data-tag="${escapeHtml(tag)}">
             ${tagStateButtonHtml(cvTagFilters.get(tag) || 'neutral')}
             <span class="tag-label" title="${escapeHtml(tag)}">${escapeHtml(tag)}</span>
-            ${count != null ? `<span class="cv-tag-count">${formatNumber(count)}</span>` : ''}
+            ${count != null ? `<span class="tag-count">${formatNumber(count)}</span>` : ''}
         </div>
     `).join('');
 }
@@ -550,25 +547,11 @@ function cycleCvTag(item) {
 const cvTagReloadDebounced = debounce(() => charavaultBrowseView.reload(), 400);
 
 function updateCvTagsBtn() {
-    const btn = document.getElementById('cvTagsBtn');
-    const label = document.getElementById('cvTagsBtnLabel');
-    if (!btn || !label) return;
-    if (cvTagFilters.size > 0) {
-        label.textContent = `Tags (${cvTagFilters.size})`;
-        btn.classList.add('has-filters');
-    } else {
-        label.textContent = 'Tags';
-        btn.classList.remove('has-filters');
-    }
+    setFilterCount(document.getElementById('cvTagsBtn'), 'Tags', cvTagFilters.size);
 }
 
 function updateCvFiltersBtn() {
-    const btn = document.getElementById('cvFiltersBtn');
-    if (!btn) return;
-    const count = countActiveFeatures(CV_FEATURE_FILTERS, cvFeatureState) + (cvLorebookMode !== 'any' ? 1 : 0);
-    btn.classList.toggle('has-filters', count > 0);
-    const span = btn.querySelector('span');
-    if (span) span.textContent = count > 0 ? `Features (${count})` : 'Features';
+    setFilterCount(document.getElementById('cvFiltersBtn'), 'Features', countActiveFeatures(CV_FEATURE_FILTERS, cvFeatureState));
 }
 
 // ========================================
@@ -705,13 +688,7 @@ async function openCvPreview(char) {
     }
 
     // Import button state, kept in step with the library while the preview is open
-    const restampImport = () => {
-        const inLibraryNow = view.isHitInLibrary(char);
-        view.stampImportButton(document.getElementById('cvDownloadBtn'), {
-            inLibrary: inLibraryNow,
-            possibleMatch: !inLibraryNow && !!view.getPossibleMatchTier(char.name || '', creator)?.show,
-        });
-    };
+    const restampImport = () => view.stampPreviewImport(document.getElementById('cvDownloadBtn'), char);
     restampImport();
     view.trackPreview(restampImport, char);
 
@@ -941,7 +918,7 @@ async function loadCvSimilar({ path, folder, file, fullPath } = {}) {
             const tooltip = reasons ? `${sName} — ${reasons}` : sName;
             return `<div class="cv-similar-card" data-full-path="${escapeHtml(fp)}" title="${tooltip}">
                 <div class="cv-similar-card-thumb">
-                    <img src="${escapeHtml(thumb)}" alt="${sName}" loading="lazy">
+                    <img src="${escapeHtml(thumb)}" alt="${sName}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='/img/no-portrait.png'">
                     ${score}
                 </div>
                 <div class="cv-similar-card-name">${sName}</div>
@@ -998,7 +975,7 @@ let delegatesInitialized = false;
 let cvModalEventsAttached = false;
 
 function initCvView() {
-    cvNsfwMode = (cvSettings?.get('nsfw') || 'sfw') === 'sfw' ? 'sfw' : 'any';
+    cvNsfwEnabled = cvNsfwSetting();
     if (delegatesInitialized) return;
     delegatesInitialized = true;
 
@@ -1065,9 +1042,9 @@ function initCvView() {
     // Load more
     on('cvLoadMoreBtn', 'click', () => charavaultBrowseView.reload({ append: true }));
 
-    // NSFW 3-state toggle
+    // NSFW toggle (SFW Only / NSFW On)
     on('cvNsfwToggle', 'click', () => {
-        cycleCvNsfwMode();
+        toggleCvNsfw();
         updateCvNsfwToggle();
         charavaultBrowseView.reload();
     });
@@ -1113,7 +1090,7 @@ function initCvView() {
         if (e.target.closest('.browse-tag-state-btn, .tag-label')) cycleCvTag(e.target.closest('.browse-tag-filter-item'));
     });
 
-    // Features dropdown: the lorebook tri-state radios plus the shared Library rows
+    // Features dropdown: Lorebook, My Favorites and the shared Library rows
     on('cvFiltersBtn', 'click', (e) => {
         e.stopPropagation();
         CoreAPI.closeAllTopbarDropdowns?.('cvFiltersDropdown');
@@ -1121,15 +1098,6 @@ function initCvView() {
         filtersDropdown?.classList.toggle('hidden');
     });
     filtersDropdown?.addEventListener('click', (e) => e.stopPropagation());
-
-    document.querySelectorAll('input[name="cvLorebookMode"]').forEach(input => {
-        input.addEventListener('change', (e) => {
-            if (!e.target.checked) return;
-            cvLorebookMode = e.target.value;
-            updateCvFiltersBtn();
-            charavaultBrowseView.reload();
-        });
-    });
 
     charavaultBrowseView.wireFeatureFilters(CV_FEATURE_FILTERS, cvFeatureState, (f, e) => {
         // My Favorites is the account's list: a search or creator scope does not apply to it
@@ -1380,22 +1348,17 @@ class CharaVaultBrowseView extends BrowseView {
                 </div>
             </div>
 
-            <!-- Features: lorebook tri-state + library rows -->
+            <!-- Features: Lorebook, My Favorites, Library rows -->
             <div class="browse-more-filters u-relative">
                 <button id="cvFiltersBtn" class="glass-btn" title="Feature filters">
                     <i class="fa-solid fa-sliders"></i> <span>Features</span>
                 </button>
                 <div id="cvFiltersDropdown" class="dropdown-menu browse-features-dropdown hidden">
-                    <div class="dropdown-section-title">Lorebook</div>
-                    <label class="filter-checkbox"><input type="radio" name="cvLorebookMode" value="any" checked> Any</label>
-                    <label class="filter-checkbox"><input type="radio" name="cvLorebookMode" value="with"> <i class="fa-solid fa-book"></i> Has lorebook</label>
-                    <label class="filter-checkbox"><input type="radio" name="cvLorebookMode" value="without"> <i class="fa-solid fa-book-skull"></i> No lorebook</label>
-                    <hr class="browse-filter-divider">
                     ${renderFeatureFilterItems(CV_FILTER_SECTIONS, CV_FEATURE_FILTERS)}
                 </div>
             </div>
 
-            <!-- NSFW 3-state toggle -->
+            <!-- NSFW toggle -->
             <button id="cvNsfwToggle" class="glass-btn nsfw-toggle" title="Showing SFW only - click to include NSFW">
                 <i class="fa-solid fa-shield-halved"></i> <span>SFW Only</span>
             </button>
@@ -1435,12 +1398,12 @@ class CharaVaultBrowseView extends BrowseView {
                 </div>
 
                 <!-- Creator banner (shown when filtering by creator) -->
-                <div id="cvCreatorBanner" class="cv-creator-banner hidden">
-                    <div class="cv-creator-banner-content">
+                <div id="cvCreatorBanner" class="browse-author-banner hidden">
+                    <div class="browse-author-banner-content">
                         <i class="fa-solid fa-user"></i>
                         <span>Showing characters by <strong id="cvCreatorBannerName"></strong></span>
                     </div>
-                    <div class="cv-creator-banner-actions">
+                    <div class="browse-author-banner-actions">
                         <button id="cvClearCreatorBtn" class="glass-btn icon-only" title="Clear creator filter">
                             <i class="fa-solid fa-times"></i>
                         </button>
@@ -1491,32 +1454,35 @@ class CharaVaultBrowseView extends BrowseView {
                 </div>
             </div>
             <div class="browse-char-body">
-                <div class="cv-modal-stats">
-                    <div class="cv-modal-stat" title="Average rating / vote count">
-                        <i class="fa-solid fa-star"></i>
-                        <span id="cvCharRating">0.0</span>
-                        <span id="cvCharRatingCount" class="cv-modal-stat-sub"></span>
+                <div class="browse-char-meta-grid">
+                    <div class="browse-char-stats">
+                        <div class="browse-stat" title="Average rating / vote count">
+                            <i class="fa-solid fa-star"></i>
+                            <span id="cvCharRating">0.0</span>
+                            <span id="cvCharRatingCount"></span>
+                        </div>
+                        <div class="browse-stat" title="Token count">
+                            <i class="fa-solid fa-coins"></i>
+                            <span id="cvCharTokens">0</span> tokens
+                        </div>
+                        <div class="browse-stat" id="cvCharDownloadsStat" hidden title="Total downloads on CharaVault">
+                            <i class="fa-solid fa-cloud-arrow-down"></i>
+                            <span id="cvCharDownloads">0</span>
+                        </div>
+                        <div class="browse-stat" id="cvCharLorebookStat" hidden title="Linked lorebook(s)">
+                            <i class="fa-solid fa-book"></i>
+                            <span id="cvCharLorebookText">Lorebook</span>
+                        </div>
+                        <div class="browse-stat" id="cvCharGreetingsStat" hidden title="Alternate greetings">
+                            <i class="fa-solid fa-comment-dots"></i>
+                            <span id="cvCharGreetingsCount">0</span> greetings
+                        </div>
+                        <div class="browse-stat" id="cvCharNsfwStat" hidden title="NSFW reasons">
+                            <i class="fa-solid fa-triangle-exclamation"></i>
+                            <span id="cvCharNsfwReasons"></span>
+                        </div>
                     </div>
-                    <div class="cv-modal-stat" title="Token count">
-                        <i class="fa-solid fa-coins"></i>
-                        <span id="cvCharTokens" class="cv-token-count">0</span> tokens
-                    </div>
-                    <div class="cv-modal-stat" id="cvCharDownloadsStat" hidden title="Total downloads on CharaVault">
-                        <i class="fa-solid fa-cloud-arrow-down"></i>
-                        <span id="cvCharDownloads">0</span>
-                    </div>
-                    <div class="cv-modal-stat" id="cvCharLorebookStat" hidden title="Linked lorebook(s)">
-                        <i class="fa-solid fa-book"></i>
-                        <span id="cvCharLorebookText">Lorebook</span>
-                    </div>
-                    <div class="cv-modal-stat" id="cvCharGreetingsStat" hidden title="Alternate greetings">
-                        <i class="fa-solid fa-comment-dots"></i>
-                        <span id="cvCharGreetingsCount">0</span> greetings
-                    </div>
-                    <div class="cv-modal-stat" id="cvCharNsfwStat" hidden title="NSFW reasons">
-                        <i class="fa-solid fa-triangle-exclamation"></i>
-                        <span id="cvCharNsfwReasons"></span>
-                    </div>
+                    <div class="browse-char-tags" id="cvCharTags"></div>
                 </div>
                 <div class="cv-modal-tier" id="cvCharTierBox" hidden>
                     <i class="fa-solid fa-microchip"></i>
@@ -1526,7 +1492,6 @@ class CharaVaultBrowseView extends BrowseView {
                         <span id="cvCharTierPreset" class="cv-modal-tier-preset"></span>
                     </div>
                 </div>
-                <div class="browse-char-tags" id="cvCharTags"></div>
 
                 <!-- Creator's Notes -->
                 <div class="browse-char-section" id="cvCharCreatorNotesSection" hidden>
@@ -1670,7 +1635,6 @@ class CharaVaultBrowseView extends BrowseView {
         cvGridRenderedCount = 0;
         cvSelectedChar = null;
         cvSortMode = 'most_downloaded';
-        cvLorebookMode = 'any';
         cvTagFilters = new Map();
         for (const k of Object.keys(cvFeatureState)) cvFeatureState[k] = false;
         // a rebuilt DOM needs its listeners back even when deactivate() never ran
@@ -1693,6 +1657,13 @@ class CharaVaultBrowseView extends BrowseView {
 
     onActivated(isReEntry) {
         if (isReEntry) delegatesInitialized = true;
+        // the NSFW setting is shared with the Lorebooks kind: a flip there drops the list on re-entry (as Chub)
+        const nsfw = cvNsfwSetting();
+        if (isReEntry && nsfw !== cvNsfwEnabled) {
+            cvNsfwEnabled = nsfw;
+            updateCvNsfwToggle();
+            cvCharacters = []; cvCurrentPage = 0; cvHasMore = true; cvGridRenderedCount = 0;
+        }
     }
 
     closePreview() {

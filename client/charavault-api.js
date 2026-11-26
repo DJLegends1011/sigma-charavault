@@ -14,8 +14,6 @@ export const CV_SORTS = Object.freeze([
     { value: 'most_commented', label: 'Most Commented', icon: 'fa-solid fa-comments' },
 ].map(Object.freeze));
 
-const FOLDER_RE = /^[A-Za-z0-9_-]{1,64}$/;
-
 export function isValidCvSegment(file) {
     if (typeof file !== 'string') return false;
     const s = file.trim();
@@ -29,7 +27,8 @@ export function isValidCvPath(fullPath) {
     if (!raw || raw.startsWith('/') || raw.includes('\\') || raw.includes('\0')) return false;
     const parts = raw.split('/');
     if (parts.length === 1) return isValidCvSegment(parts[0]);
-    if (parts.length === 2) return FOLDER_RE.test(parts[0]) && isValidCvSegment(parts[1]);
+    // folders carry spaces and punctuation on charavault.net, so they pass the file name's traversal guard
+    if (parts.length === 2) return isValidCvSegment(parts[0]) && isValidCvSegment(parts[1]);
     return false;
 }
 
@@ -361,17 +360,32 @@ export async function resolveCvCharacterBook(fullPath, detail, { missing = null 
     }
     return entries.length ? { ...(embedded || firstLinked), entries: entries.map((e, i) => ({ ...e, id: i + 1 })) } : undefined;
 }
+/**
+ * STOPGAP: the link namespaces of every registered provider. Reads window.PROVIDER_MANIFEST
+ * (app/modules/providers/provider-registry.js), which no documented door lists; replace it with a
+ * provider-list door when Sigma ships one. Fails safe: without the global, only the known
+ * first-party namespaces are answered.
+ */
+function stopgapProviderNamespaces() {
+    const providers = new Set(['chub', 'janitorai', 'jannyai', 'chartavern', 'pygmalion', 'wyvern', 'datacat', 'botbooru', 'risu-realm']);
+    try {
+        const manifest = globalThis.window?.PROVIDER_MANIFEST;
+        if (manifest && typeof manifest === 'object') {
+            for (const [key, row] of Object.entries(manifest)) {
+                providers.add(key);
+                if (typeof row?.extNamespace === 'string') providers.add(row.extNamespace);
+                if (typeof row?.id === 'string') providers.add(row.id);
+            }
+        }
+    } catch { /* the known namespaces still answer */ }
+    return providers;
+}
+
+// a card mirrored from another site still carries that site's link: the import must not claim it twice
 export function stripForeignProviderNamespaces(card) {
     const extensions = card?.data?.extensions;
     if (!extensions || typeof extensions !== 'object') return card;
-    const providers = new Set(['chub', 'janitorai', 'jannyai', 'chartavern', 'pygmalion', 'wyvern', 'datacat', 'botbooru', 'risu-realm']);
-    const manifest = globalThis.window?.PROVIDER_MANIFEST || {};
-    for (const [key, row] of Object.entries(manifest)) {
-        providers.add(key);
-        if (row?.extNamespace) providers.add(row.extNamespace);
-        if (row?.id) providers.add(row.id);
-    }
-    for (const key of providers) if (key !== 'charavault') delete extensions[key];
+    for (const key of stopgapProviderNamespaces()) if (key !== 'charavault') delete extensions[key];
     return card;
 }
 export function buildCvCharacterCard(detail, fullPath, searchEntry = null, characterBook = undefined) {

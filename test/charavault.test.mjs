@@ -24,7 +24,7 @@ process.env.CL_ALLOW_PRIVATE_FETCH = 'true';
 const { startSigma, basePng } = await import(pathToFileURL(kitPath).href);
 const pngCardPath = path.resolve(path.dirname(kitPath), '../../server/lib/png-card.js');
 const { writeCardChunks, readCardChunks } = await import(pathToFileURL(pngCardPath).href);
-const { resolveCvBases, assertSafeUpstreamUrl, forgetCvSessions } = await import(pathToFileURL(path.join(here, '../server/index.js')).href);
+const { resolveCvBases, assertSafeUpstreamUrl, forgetCvSessions, validateCardSegments } = await import(pathToFileURL(path.join(here, '../server/index.js')).href);
 
 // ---- Mock CharaVault upstream server (verifies headers, query params, auth, redirects, and CORP)
 const upstreamRequests = [];
@@ -700,6 +700,12 @@ test('server proxy routes forward queries, attach User-Agent & auth headers, str
     assert.equal(revs.body.revisions.length, 3);
     assert.equal(upstreamRequests.at(-1).searchParams.path, 'cards/Adley_5412114.png');
     assert.equal((await cvExt('/cards/revisions?path=' + encodeURIComponent('../auth/me'))).status, 400);
+    // charavault.net folders carry spaces and punctuation; traversal still never passes
+    assert.deepEqual(validateCardSegments('sinkdrinker - 5Volt - 296043', 'sinkdrinker - 5Volt - 296043.card.png'), { folder: 'sinkdrinker - 5Volt - 296043', file: 'sinkdrinker - 5Volt - 296043.card.png' });
+    assert.ok(validateCardSegments('Venusai Official Discord Server', 'bd0_0015 (Amane).card.png'));
+    for (const [folder, file] of [['..', 'x.png'], ['a/b', 'x.png'], ['a\\b', 'x.png'], ['ok', '../x.png'], ['', 'x.png']]) {
+        assert.throws(() => validateCardSegments(folder, file), /Invalid card folder/, `${folder} / ${file}`);
+    }
     assert.equal((await cvExt('/cards/revision-file?path=' + encodeURIComponent('cards/Adley_5412114.png') + '&id=1;drop')).status, 400);
 
     // 3. Detail route preserves recommendations
@@ -838,7 +844,12 @@ test('client extension boots, renders settings & preview modal (with failed rati
     const provider = (await import(pathToFileURL(path.join(clientDir, 'charavault-provider.js')).href)).default;
     const browseView = (await import(pathToFileURL(path.join(clientDir, 'charavault-browse.js')).href)).default;
     assert.equal(provider.id, 'charavault');
-    assert.ok(globalThis.window.PROVIDER_MANIFEST.charavault);
+    // the kit's page records ctx.providers.register without running core's registry, so do here
+    // what registerExtensionProvider does (the extension itself never writes core's manifest)
+    if (!provider._manifest) provider._manifest = { name: 'CharaVault', extNamespace: 'charavault', hosts: ['charavault.net'] };
+    if (!provider._coreAPI) await provider.init(page.CoreAPI);
+    assert.equal(globalThis.window.PROVIDER_MANIFEST?.charavault, undefined, 'the extension leaves core\'s manifest alone');
+    assert.equal(globalThis.window.cvImportCharacter, undefined, 'no window globals');
 
     // 2. Verify Settings > Online > CharaVault section renders & persists
     // the kit renders the section into a bare stand-in node, so init once more with a ctx that keeps the render
@@ -870,6 +881,8 @@ test('client extension boots, renders settings & preview modal (with failed rati
     assert.equal(provider.parseUrl('https://charavault.net/cards/preview/../auth'), null, 'parseUrl must reject .. traversal');
     assert.equal(provider.parseUrl('https://charavault.net/cards/preview/cards/%E0%A4%A'), null, 'parseUrl must not throw on malformed percent-encoding');
     assert.equal(provider.readLink({ id: '../auth' }), null, 'readLink must reject traversal paths in crafted cards');
+    assert.ok(provider.readLink({ id: 'Venusai Official Discord Server/bd0_0015 (Amane).card.png' }), 'a spaced folder links');
+    assert.equal(provider.readLink({ id: '../x/y.png' }), null);
     // charavault.net has no per-card page: the link is the card file URL, and it must read back as the same card
     const cardLink = provider.getCharacterUrl({ fullPath: 'janitorai/d81_Hayami The Sensei.card.png' });
     assert.equal(cardLink, 'https://charavault.net/cards/janitorai/d81_Hayami%20The%20Sensei.card.png');
@@ -1060,14 +1073,15 @@ test('client extension boots, renders settings & preview modal (with failed rati
     stateBtn().click();
     assert.ok(stateBtn().classList.contains('state-include'));
     await waitFor(() => lastCardsQuery?.get('tags') === tagName, 'the include tag in the query');
-    assert.equal($('cvTagsBtnLabel').textContent, 'Tags (1)');
+    assert.equal($('cvTagsBtn').querySelector('.browse-count-badge')?.textContent, '1', 'Sigma\'s count badge (setFilterCount)');
+    assert.equal($('cvTagsBtnLabel').textContent, 'Tags');
     stateBtn().click();
     assert.ok(stateBtn().classList.contains('state-exclude'));
     await waitFor(() => lastCardsQuery?.get('exclude_tags')?.split(',').includes(tagName) && !lastCardsQuery.get('tags'), 'the exclude tag in the query');
     stateBtn().click();
     assert.ok(stateBtn().classList.contains('state-neutral'));
     await waitFor(() => !lastCardsQuery?.get('tags') && !(lastCardsQuery?.get('exclude_tags') || '').includes(tagName), 'the tag to clear');
-    assert.equal($('cvTagsBtnLabel').textContent, 'Tags');
+    assert.equal($('cvTagsBtn').querySelector('.browse-count-badge'), null);
 
     // 13. NSFW: two states with .active, as every Sigma provider (the mobile sheet's chip mirrors both)
     const nsfwBtn = $('cvNsfwToggle');
@@ -1080,4 +1094,33 @@ test('client extension boots, renders settings & preview modal (with failed rati
     nsfwBtn.click();
     assert.equal(nsfwBtn.querySelector('span').textContent, 'SFW Only');
     await waitFor(() => lastCardsQuery?.get('nsfw') === 'false', 'SFW Only to send nsfw=false');
+    // one boolean, shared with the Lorebooks kind as Chub's chubNsfw
+    assert.equal(page.settings['ext:charavault:nsfw'], false);
+    const { charavaultLorebooks } = await import(pathToFileURL(path.join(clientDir, 'charavault-lorebooks.js')).href);
+    assert.equal(charavaultLorebooks.nsfw.setting, 'ext:charavault:nsfw');
+    nsfwBtn.click();
+    assert.equal(page.settings['ext:charavault:nsfw'], true);
+    nsfwBtn.click();
+
+    // 14. Features > Character must have > Lorebook: CharaVault answers it (has_book=true), and the card badge is the row's
+    assert.equal($('cvFiltersDropdown').querySelector('input[type="radio"]'), null, 'no lorebook radios');
+    setBox('cvFilterLore', true);
+    await waitFor(() => lastCardsQuery?.get('has_book') === 'true', 'has_book=true in the query');
+    await waitFor(() => gridPaths().length > 0 && gridPaths().every(fp => fp === 'cards/Adley_5412114.png'), 'only lorebook cards');
+    assert.ok($('cvGrid').querySelector('.browse-feature-badge[title="Has Lorebook"]'));
+    assert.equal($('cvFiltersBtn').querySelector('.browse-count-badge')?.textContent, '1');
+    setBox('cvFilterLore', false);
+    await waitFor(() => lastCardsQuery && !lastCardsQuery.has('has_book'), 'has_book to drop');
+
+    // 15. a pre-1.1.0 'any' / 'sfw' string migrates to the boolean on init
+    for (const [legacy, want] of [['any', true], ['sfw', false]]) {
+        const store = { 'ext:charavault:nsfw': legacy };
+        await entry.init({
+            CoreAPI: page.CoreAPI,
+            settings: { get: (k) => store[`ext:charavault:${k}`], set: (k, v) => { store[`ext:charavault:${k}`] = v; } },
+            providers: { register: async () => {} },
+            ui: { addOverlay() {}, addProviderSettingsSection() {} },
+        });
+        assert.equal(store['ext:charavault:nsfw'], want, `'${legacy}' migrates to ${want}`);
+    }
 });

@@ -1,103 +1,14 @@
 /* ============================================
    CharaVault Extension CSS
-   Ported from AdamsGH's CharaVault PR #18 (charavault-browse.css), plus styles for the
-   linked-lorebook Import to Shelf button, the similar-controls row and the settings section.
-   Grid layout and card base styles live in the app's browse-shared.css.
+   Only what Sigma has no class for: the model-tier box, linked lorebooks, the Visually Similar
+   grid, the settings gateway group and the favorite heart. Banner, stats, tag counts, cards
+   and the grid are Sigma's own (browse-shared.css).
    ============================================ */
-
-/* Tags dropdown: Sigma's tri-state rows (browse-shared.css); the tag's card count sits right, as Botbooru's meta */
-#cvTagsList .cv-tag-count {
-    margin-left: auto;
-    font-size: var(--font-3xs);
-    color: var(--text-muted);
-    white-space: nowrap;
-    flex-shrink: 0;
-}
-#cvTagsList .browse-tag-filter-item .tag-label {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
 
 /* A lorebook without a cover PNG gets the icon tile, never an <img>, so the shared card-image shimmer
    (stopped by .loaded when an image arrives) would loop forever: no image is coming, so no shimmer */
 .browse-card-image:has(> .lorebook-tile)::before {
     display: none;
-}
-
-/* Feature filters (lorebook tri-state + library rows) */
-#cvFiltersDropdown {
-    width: 240px;
-}
-
-/* Creator banner (shown while the creator filter is active) */
-.cv-creator-banner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 14px;
-    background: rgba(var(--accent-rgb, 74, 144, 226), 0.08);
-    border: 1px solid rgba(var(--accent-rgb, 74, 144, 226), 0.2);
-    border-radius: 8px;
-    margin-bottom: 10px;
-    gap: 10px;
-}
-
-.cv-creator-banner.hidden {
-    display: none;
-}
-
-.cv-creator-banner-content {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: var(--font-md);
-    color: var(--text-primary, #e0e0e0);
-}
-
-.cv-creator-banner-content i {
-    color: var(--accent, #4a90e2);
-}
-
-.cv-creator-banner-actions {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-/* Modal stat grid */
-.cv-modal-stats {
-    display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
-    margin-bottom: 10px;
-}
-
-.cv-modal-stat {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: var(--font-md);
-    color: var(--text-secondary, #aaa);
-}
-
-.cv-modal-stat i {
-    width: 14px;
-    text-align: center;
-    color: var(--accent, #4a90e2);
-}
-
-/* Token count display */
-.cv-token-count {
-    font-variant-numeric: tabular-nums;
-}
-
-.cv-modal-stat-sub {
-    margin-left: 4px;
-    font-size: 0.85em;
-    color: var(--text-secondary, #888);
-    font-variant-numeric: tabular-nums;
 }
 
 /* Recommended tier box (model class hint) */
@@ -107,8 +18,8 @@
     align-items: flex-start;
     margin: 6px 0 12px;
     padding: 8px 12px;
-    background: rgba(var(--accent-rgb, 74, 144, 226), 0.06);
-    border-left: 3px solid rgba(var(--accent-rgb, 74, 144, 226), 0.55);
+    background: rgba(var(--accent-rgb), 0.06);
+    border-left: 3px solid rgba(var(--accent-rgb), 0.55);
     border-radius: 4px;
     font-size: var(--font-md);
 }
@@ -118,7 +29,7 @@
 }
 
 .cv-modal-tier > i {
-    color: var(--accent, #4a90e2);
+    color: var(--accent);
     margin-top: 2px;
 }
 
@@ -136,7 +47,7 @@
 .cv-modal-tier-preset {
     margin-top: 2px;
     font-size: 0.85em;
-    color: var(--text-secondary, #888);
+    color: var(--text-secondary);
     font-style: italic;
 }
 
@@ -158,13 +69,13 @@
 }
 
 .cv-linked-book i {
-    color: var(--accent, #4a90e2);
+    color: var(--accent);
     width: 14px;
     text-align: center;
 }
 
 .cv-linked-book-title {
-    color: var(--text-primary, #e0e0e0);
+    color: var(--text-primary);
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -173,7 +84,7 @@
 }
 
 .cv-linked-book-meta {
-    color: var(--text-secondary, #888);
+    color: var(--text-secondary);
     font-size: 0.85em;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
@@ -207,7 +118,7 @@
 }
 
 .cv-similar-status {
-    color: var(--text-secondary, #888);
+    color: var(--text-secondary);
     font-size: 0.9em;
     line-height: 1.35;
 }
@@ -229,7 +140,7 @@
 }
 
 .cv-similar-card:hover {
-    background: rgba(var(--accent-rgb, 74, 144, 226), 0.12);
+    background: rgba(var(--accent-rgb), 0.12);
     transform: translateY(-1px);
 }
 
@@ -269,7 +180,7 @@
 .cv-similar-card-creator {
     padding: 0 6px 4px;
     font-size: 0.75em;
-    color: var(--text-secondary, #888);
+    color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -281,7 +192,7 @@
 
 details#cvGatewayAdvanced,
 [data-provider="charavault"] details.settings-advanced {
-    margin-top: var(--space-sm, 8px);
+    margin-top: var(--space-sm);
 }
 
 details#cvGatewayAdvanced > summary,
@@ -289,7 +200,7 @@ details#cvGatewayAdvanced > summary,
     cursor: pointer;
     color: var(--text-secondary);
     font-size: var(--font-md);
-    padding: var(--space-xs-sm, 4px) 0;
+    padding: var(--space-xs-sm) 0;
     user-select: none;
 }
 
@@ -300,18 +211,18 @@ details#cvGatewayAdvanced > summary:hover,
 
 details#cvGatewayAdvanced[open] > summary,
 [data-provider="charavault"] details.settings-advanced[open] > summary {
-    margin-bottom: var(--space-sm, 8px);
+    margin-bottom: var(--space-sm);
 }
 
 details#cvGatewayAdvanced .settings-row,
 [data-provider="charavault"] details.settings-advanced .settings-row {
-    margin-bottom: var(--space-md, 12px);
+    margin-bottom: var(--space-md);
 }
 
 /* login check result under the App Password row */
-#cvLoginStatus[data-state="ok"] { color: var(--success, #4caf50); }
-#cvLoginStatus[data-state="warn"] { color: var(--warning, #e0a800); }
-#cvLoginStatus[data-state="error"] { color: var(--danger, #e05252); }
+#cvLoginStatus[data-state="ok"] { color: var(--cl-success); }
+#cvLoginStatus[data-state="warn"] { color: var(--cl-warning); }
+#cvLoginStatus[data-state="error"] { color: var(--cl-danger-text); }
 
 /* Card modal header: Copy link + Image + Import + close wrap onto two lines on phones; keep the two secondary actions icon-only there */
 html.cl-mobile #cvCharModal .modal-controls .cv-btn-label { display: none; }

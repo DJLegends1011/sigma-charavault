@@ -34,7 +34,8 @@ export const charavaultLorebooks = {
         { value: 'newest', label: 'Newest (page)' },
     ],
     defaultSort: 'default',
-    nsfw: { setting: 'ext:charavault:lorebookNsfw' },
+    // the character view's own switch, as Chub's lorebooks share chubNsfw
+    nsfw: { setting: 'ext:charavault:nsfw' },
     async fetchPage({ query = '', sort = 'default', nsfw = false, page = 1, limit = 48, signal } = {}) {
         const data = await fetchCvLorebooks({ q: query, nsfw: nsfw ? null : false, limit, offset: (page - 1) * limit, sort, signal });
         const hits = (Array.isArray(data?.lorebooks) ? data.lorebooks : []).map(normalizeCvLorebook);

@@ -67,11 +67,6 @@ class CharaVaultProvider extends ProviderBase {
     async init(coreAPI) {
         await super.init(coreAPI);
         api = coreAPI;
-        // Expose the import function for anything driving the preview modal by hand
-        if (typeof globalThis.window !== 'undefined') {
-            globalThis.window.cvImportCharacter = (fullPath, hitData, options) =>
-                this.importCharacter(fullPath, hitData, options);
-        }
     }
 
     // ── Account ─────────────────────────────────────────────
